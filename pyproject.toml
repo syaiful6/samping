@@ -1,0 +1,18 @@
+[project]
+name = "samping"
+version = "0.1.0"
+description = "Add a short description here"
+authors = [{ name = "syaiful6", email = "syai.bahri6@gmail.com" }]
+dependencies = ["pytz>=2022.7.1", "msgpack>=1.0.5", "croniter>=2.0.3"]
+readme = "README.md"
+requires-python = ">= 3.8"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+
+[tool.hatch.metadata]
+allow-direct-references = true
