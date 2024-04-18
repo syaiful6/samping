@@ -4,6 +4,7 @@ import base64
 from datetime import datetime
 from croniter import croniter
 import signal
+import uuid
 from typing import Optional, List, Callable, Union, Dict
 
 from .driver import QueueDriver
@@ -78,17 +79,30 @@ class App:
 
         return create_task_cls
 
-    async def run_matched_tabs(self, current_date: Optional[datetime]):
+    async def run_matched_tabs(self, current_date: Optional[datetime] = None):
         n = utcnow() if current_date is None else current_date
-
-        async with asyncio.TaskGroup() as tg:
-            for name, tab in self._cron_tabs.items():
-                if croniter.match(tab.expression, n):
-                    tg.create_task(
-                        asyncio.wait_for(
-                            run_tab(self.logger, tab, name), timeout=self._task_timeout
+        tasks = []
+        for name, tab in self._cron_tabs.items():
+            if croniter.match(tab.expression, n):
+                task = asyncio.create_task(
+                    asyncio.wait_for(
+                        run_tab(self.logger, tab, name), timeout=self._task_timeout
+                    ),
+                    name=name + "-" + str(uuid.uuid4()),
+                )
+                tasks.append(task)
+        if tasks:
+            try:
+                done, _ = await asyncio.wait(tasks)
+                for task in done:
+                    try:
+                        await task
+                    except Exception as e:
+                        self.logger.error(
+                            f"cron job {task.get_name()} exited with error: {e}"
                         )
-                    )
+            except Exception as e:
+                self.logger.error(f"cron jobs exited with error: {e}")
 
     def __call__(self, event: dict, context: dict):
         if self.is_queue_event(event):
@@ -123,11 +137,11 @@ class App:
                 lambda: asyncio.create_task(self._signal_handler(signame)),
             )
 
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(self._run_producer(queues))
-            tg.create_task(self._run_worker(num_worker))
-            if not self.disable_cron:
-                tg.create_task(self._run_cron())
+        tasks = [self._run_producer(queues), self._run_worker(num_worker)]
+        if not self.disable_cron:
+            tasks.append(self._run_cron())
+
+        return await asyncio.gather(*tasks)
 
     async def _run_producer(self, queues: str):
         i = 0
@@ -143,9 +157,7 @@ class App:
                 self.logger.exception("producer %d exited, make it running again", i)
 
     async def _run_worker(self, num_worker: int = 3):
-        async with asyncio.TaskGroup() as tg:
-            for _ in range(num_worker):
-                tg.create_task(self.worker())
+        return await asyncio.gather(*[self.worker() for _ in range(num_worker)])
 
     async def worker(self):
         while True:
@@ -187,9 +199,9 @@ class App:
         self.loop.run_until_complete(handle_message_task)
 
     async def handle_messages(self, messages: List[Message], managed: bool = True):
-        async with asyncio.TaskGroup() as tg:
-            for message in messages:
-                tg.create_task(self.handle_message(message, managed=managed))
+        await asyncio.gather(
+            *[self.handle_message(message, managed=managed) for message in messages]
+        )
 
     async def handle_message(self, message: Message, managed: bool = True):
         task_message = message.decode_task_message()
