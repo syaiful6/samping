@@ -140,7 +140,7 @@ class App:
                     await self.queue.put(message)
             except Exception:
                 i += 1
-                self.logger.exception("producer %d exited, make it running again")
+                self.logger.exception("producer %d exited, make it running again", i)
 
     async def _run_worker(self, num_worker: int = 3):
         async with asyncio.TaskGroup() as tg:
