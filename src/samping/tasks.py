@@ -125,3 +125,12 @@ class Task:
             queue=None,
             **opts,
         )
+
+
+class CronJob:
+    name = None
+
+    expression = "* * * * *"
+
+    async def run(self):
+        raise NotImplementedError("CronJob must define the run method.")

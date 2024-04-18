@@ -33,7 +33,7 @@ class Message:
     )
 
     def __init__(
-        self, ack_id: str, body: bytes, queue: str = None, receive_count: int = 1
+        self, ack_id: str, body: bytes, queue: str = "", receive_count: int = 1
     ):
         self.ack_id = ack_id
         self.body = body
