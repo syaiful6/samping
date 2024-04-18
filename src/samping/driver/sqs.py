@@ -81,7 +81,7 @@ class SQSDriver(QueueDriver):
             if queue in self._queues:
                 return await sqs.Queue(self._queues[queue])
             try:
-                sqs_queue = sqs.get_queue_by_name(QueueName=queue)
+                sqs_queue = await sqs.get_queue_by_name(QueueName=queue)
             except ClientError as error:
                 if (
                     error.response["Error"]["Code"]
