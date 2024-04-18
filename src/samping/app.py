@@ -27,6 +27,7 @@ class App:
         queue_size: int = 100,
         default_queue: str = "default",
         routes: Optional[List[Rule]] = None,
+        disable_cron: bool = False,
     ):
         self._task_timeout = task_timeout
         self._queue_size = queue_size
@@ -39,6 +40,7 @@ class App:
         self._queue = None
         self.default_queue = default_queue
         self.routes = routes or None
+        self.disable_cron = disable_cron
 
     def task_route(self, task: Task) -> str:
         queue = route(task.name, self.routes)
