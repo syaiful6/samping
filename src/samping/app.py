@@ -260,7 +260,7 @@ class App:
             except ValueError:
                 event_time = None
 
-            cron_instance = self.run_matched_tabs(date=event_time)
+            cron_instance = self.run_matched_tabs(current_date=event_time)
             cron_task = self.loop.create_task(cron_instance)
             self.loop.run_until_complete(cron_task)
         else:
