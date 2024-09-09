@@ -167,7 +167,7 @@ class App:
                 await self.handle_message(message)
             except asyncio.TimeoutError:
                 is_timeout = True
-                self.logger.exception("queue is empty or wait takes longer than 5 seconds...")
+                self.logger.info("queue is empty or wait takes longer than 5 seconds...")
             except Exception:
                 self.logger.exception("failed to handle a message")
             finally:
