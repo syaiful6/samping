@@ -162,12 +162,17 @@ class App:
     async def worker(self):
         while True:
             try:
-                message = await self.queue.get()
+                is_timeout = False
+                message = await asyncio.wait_for(self.queue.get(), timeout=5)
                 await self.handle_message(message)
+            except asyncio.TimeoutError:
+                is_timeout = True
+                self.logger.exception("queue is empty or wait takes longer than 5 seconds...")
             except Exception:
                 self.logger.exception("failed to handle a message")
             finally:
-                self.queue.task_done()
+                if not is_timeout:
+                    self.queue.task_done()
 
     async def _run_cron(self):
         while True:
