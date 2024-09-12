@@ -1,6 +1,6 @@
 [project]
 name = "samping"
-version = "0.1.3"
+version = "0.1.4"
 description = "simple task queue library and background task processing"
 authors = [{ name = "syaiful6", email = "syai.bahri6@gmail.com" }]
 dependencies = ["pytz>=2022.7.1", "msgpack>=1.0.5", "croniter>=2.0.3"]
