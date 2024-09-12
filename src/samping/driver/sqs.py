@@ -175,14 +175,14 @@ class SQSDriver(QueueDriver):
                     self.logger.info("sqs: got empty messages")
             else:
                 next_wait = self._backoff.next_backoff().total_seconds()
-                self.logger.info(
+                self.logger.debug(
                     f"waiting in {self._in_flight} flight message to be processed (max: {self._prefetch_size})"
                 )
 
             if next_wait == 0:
                 self._backoff.reset()
                 next_wait = self.batch_window
-            self.logger.info(
+            self.logger.debug(
                 f"sqs: sleeping for {next_wait} seconds before polling again"
             )
             await asyncio.sleep(next_wait)

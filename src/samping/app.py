@@ -12,6 +12,7 @@ from .exceptions import Retry
 from .tasks import Task, CronJob
 from .messages import Message
 from .routes import route, Rule
+from .backoff import Backoff
 from .utils import try_to_int, utcnow, parse_iso8601
 
 
@@ -45,7 +46,7 @@ class App:
 
     def task_route(self, task: Task) -> str:
         queue = route(task.name, self.routes)
-        self.logger.info("route %s to queue %s", task.name, queue or self.default_queue)
+        self.logger.debug("route %s to queue %s", task.name, queue or self.default_queue)
         return queue or self.default_queue
 
     @property
@@ -160,19 +161,25 @@ class App:
         return await asyncio.gather(*[self.worker() for _ in range(num_worker)])
 
     async def worker(self):
+        backoff = Backoff()
         while True:
             try:
+                next_wait = 0
                 is_timeout = False
-                message = await asyncio.wait_for(self.queue.get(), timeout=5)
+                message = await asyncio.wait_for(self.queue.get(), timeout=10)
                 await self.handle_message(message)
+                backoff.reset()
             except asyncio.TimeoutError:
                 is_timeout = True
-                self.logger.info("queue is empty or wait takes longer than 5 seconds...")
+                self.logger.debug("queue is empty or wait takes longer than 10 seconds...")
+                next_wait = backoff.next_backoff().total_seconds()
             except Exception:
                 self.logger.exception("failed to handle a message")
             finally:
                 if not is_timeout:
                     self.queue.task_done()
+                if next_wait:
+                    await asyncio.sleep(next_wait)
 
     async def _run_cron(self):
         while True:
