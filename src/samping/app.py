@@ -12,7 +12,7 @@ from .exceptions import Retry
 from .tasks import Task, CronJob
 from .messages import Message
 from .routes import route, Rule
-from .backoff import Backoff
+from .backoff import Exponential
 from .utils import try_to_int, utcnow, parse_iso8601
 
 
@@ -46,7 +46,9 @@ class App:
 
     def task_route(self, task: Task) -> str:
         queue = route(task.name, self.routes)
-        self.logger.debug("route %s to queue %s", task.name, queue or self.default_queue)
+        self.logger.debug(
+            "route %s to queue %s", task.name, queue or self.default_queue
+        )
         return queue or self.default_queue
 
     @property
@@ -161,7 +163,7 @@ class App:
         return await asyncio.gather(*[self.worker() for _ in range(num_worker)])
 
     async def worker(self):
-        backoff = Backoff()
+        backoff = Exponential()
         while True:
             try:
                 next_wait = 0
@@ -171,7 +173,9 @@ class App:
                 backoff.reset()
             except asyncio.TimeoutError:
                 is_timeout = True
-                self.logger.debug("queue is empty or wait takes longer than 10 seconds...")
+                self.logger.debug(
+                    "queue is empty or wait takes longer than 10 seconds..."
+                )
                 next_wait = backoff.next_backoff().total_seconds()
             except Exception:
                 self.logger.exception("failed to handle a message")
