@@ -83,6 +83,7 @@ class SQSDriver(QueueDriver):
             try:
                 sqs_queue = await sqs.get_queue_by_name(QueueName=queue)
             except ClientError as error:
+                print(error.response)
                 if (
                     error.response["Error"]["Code"]
                     == "AWS.SimpleQueueService.NonExistentQueue"
