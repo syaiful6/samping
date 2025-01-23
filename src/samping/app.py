@@ -5,7 +5,7 @@ from datetime import datetime
 from croniter import croniter
 import signal
 import uuid
-from typing import Optional, List, Callable, Union, Dict
+from typing import Optional, List, Callable, Union, Dict, NamedTuple
 
 from .driver import QueueDriver
 from .exceptions import Retry
@@ -13,6 +13,7 @@ from .tasks import Task, CronJob
 from .messages import Message
 from .routes import route, Rule
 from .backoff import Exponential
+from .worker import Worker
 from .utils import try_to_int, utcnow, parse_iso8601
 
 
@@ -20,6 +21,10 @@ async def run_tab(logger, tab, name):
     logger.info("executing cron tab: %s", name)
     await tab.run()
 
+
+class WorkerData(NamedTuple):
+    name: str
+    task: asyncio.Task
 
 class App:
     def __init__(
@@ -30,6 +35,7 @@ class App:
         default_queue: str = "default",
         routes: Optional[List[Rule]] = None,
         disable_cron: bool = False,
+        worker_max_tasks: Optional[int] = None,
     ):
         self._task_timeout = task_timeout
         self._queue_size = queue_size
@@ -43,6 +49,10 @@ class App:
         self.default_queue = default_queue
         self.routes = routes or None
         self.disable_cron = disable_cron
+        self.worker_dict: Dict[str, WorkerData ] = {}
+        self._num_worker = 0
+        self._stopping = False
+        self._worker_max_tasks = worker_max_tasks
 
     def task_route(self, task: Task) -> str:
         queue = route(task.name, self.routes)
@@ -57,6 +67,10 @@ class App:
             self._driver = self.driver_factory()
 
         return self._driver
+    
+    @property
+    def active_workers(self):
+        return len(self.worker_dict)
 
     @property
     def queue(self):
@@ -129,6 +143,7 @@ class App:
 
     async def _signal_handler(self, signame):
         self.logger.info("receive signal %s! exiting", signame)
+        self._stopping = True
         await self.queue.join()
         self.loop.stop()
 
@@ -140,50 +155,55 @@ class App:
                 lambda: asyncio.create_task(self._signal_handler(signame)),
             )
 
-        tasks = [self._run_producer(queues), self._run_worker(num_worker)]
-        if not self.disable_cron:
-            tasks.append(self._run_cron())
+        self._num_worker = num_worker
+        producer = asyncio.create_task(self._run_producer(queues))
+        self._run_worker(num_worker)
 
-        return await asyncio.gather(*tasks)
+        while True:
+            if self._stopping:
+                break
+            if producer.done():
+                self.logger.info("queue producer exited, starting producer")
+                producer = asyncio.create_task(self._run_producer(queues))
+            
+            self.logger.debug("active workers: %d", self.active_workers)
+
+            self.reap_workers()
+
+            await asyncio.sleep(10)
 
     async def _run_producer(self, queues: str):
-        i = 0
-        while True:
-            try:
-                async for message in self.driver.consume(queues):
-                    self.logger.debug(
-                        "got a new task message, put it in internal queue"
-                    )
-                    await self.queue.put(message)
-            except Exception:
-                i += 1
-                self.logger.exception("producer %d exited, make it running again", i)
+        try:
+            async for message in self.driver.consume(queues):
+                self.logger.debug("got a new task message, put it in internal queue")
+                await self.queue.put(message)
+        except Exception:
+            self.logger.info("producer exited...")
 
-    async def _run_worker(self, num_worker: int = 3):
-        return await asyncio.gather(*[self.worker() for _ in range(num_worker)])
+    def _run_worker(self, num_worker: int = 3):    
+        for _ in range(num_worker):
+            name = uuid.uuid4().hex
+            task = asyncio.create_task(self.worker(name), name=name)
+            self.worker_dict[name] = WorkerData(name=name, task=task)
+            task.add_done_callback(self.restart_worker)
 
-    async def worker(self):
-        backoff = Exponential()
-        while True:
-            try:
-                next_wait = 0
-                is_timeout = False
-                message = await asyncio.wait_for(self.queue.get(), timeout=10)
-                await self.handle_message(message)
-                backoff.reset()
-            except asyncio.TimeoutError:
-                is_timeout = True
-                self.logger.debug(
-                    "queue is empty or wait takes longer than 10 seconds..."
-                )
-                next_wait = backoff.next_backoff().total_seconds()
-            except Exception:
-                self.logger.exception("failed to handle a message")
-            finally:
-                if not is_timeout:
-                    self.queue.task_done()
-                if next_wait:
-                    await asyncio.sleep(next_wait)
+    async def worker(self, name):
+        worker = Worker(self._tasks, self.driver, self.default_queue, name=name, task_timeout=self._task_timeout)
+        await worker.work(self.queue, max_tasks=self._worker_max_tasks)
+
+    def restart_worker(self, task: asyncio.Task):
+        name = task.get_name()
+        if name in self.worker_dict:
+            del self.worker_dict[name]
+        self.logger.info("Worker %s exiting: spawning new asyncio task", name)
+        self._run_worker(num_worker=1)
+
+    def reap_workers(self):
+        self.logger.debug("reaping dead workers")
+        worker_datas = list(self.worker_dict.values())
+        for data in worker_datas:
+            if data.task.done():
+                self.restart_worker(data.task)
 
     async def _run_cron(self):
         while True:
