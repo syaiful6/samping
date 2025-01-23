@@ -3,11 +3,7 @@ name = "samping"
 version = "0.1.7"
 description = "simple task queue library and background task processing"
 authors = [{ name = "syaiful6", email = "syai.bahri6@gmail.com" }]
-dependencies = [
-    "pytz>=2022.7.1",
-    "msgpack>=1.0.5",
-    "croniter>=2.0.3"
-]
+dependencies = ["pytz>=2022.7.1", "msgpack>=1.0.5", "croniter>=2.0.3"]
 readme = "README.md"
 requires-python = ">= 3.10"
 
@@ -18,9 +14,9 @@ build-backend = "hatchling.build"
 [tool.rye]
 managed = true
 dev-dependencies = [
-    "pytest>=8.1.1",
-    "pytest-asyncio>=0.23.6",
-    "aioboto3>=13.4.0",
+  "pytest>=8.1.1",
+  "pytest-asyncio>=0.23.6",
+  "aioboto3>=13.4.0",
 ]
 
 [tool.hatch.metadata]
