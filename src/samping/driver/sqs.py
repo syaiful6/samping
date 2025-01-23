@@ -36,7 +36,7 @@ class SQSDriver(QueueDriver):
         visibility_timeout: int = 30,
         batch_window: int = 5,
         batch_size: int = 10,
-        prefetch_size: int = 50,
+        prefetch_size: int = 20,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
