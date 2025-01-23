@@ -26,6 +26,7 @@ class WorkerData(NamedTuple):
     name: str
     task: asyncio.Task
 
+
 class App:
     def __init__(
         self,
@@ -49,7 +50,7 @@ class App:
         self.default_queue = default_queue
         self.routes = routes or None
         self.disable_cron = disable_cron
-        self.worker_dict: Dict[str, WorkerData ] = {}
+        self.worker_dict: Dict[str, WorkerData] = {}
         self._num_worker = 0
         self._stopping = False
         self._worker_max_tasks = worker_max_tasks
@@ -67,7 +68,7 @@ class App:
             self._driver = self.driver_factory()
 
         return self._driver
-    
+
     @property
     def active_workers(self):
         return len(self.worker_dict)
@@ -157,6 +158,10 @@ class App:
 
         self._num_worker = num_worker
         producer = asyncio.create_task(self._run_producer(queues))
+        cron_task = None
+        if not self.disable_cron:
+            cron_task = asyncio.create_task(self._run_cron())
+
         self._run_worker(num_worker)
 
         while True:
@@ -165,7 +170,11 @@ class App:
             if producer.done():
                 self.logger.info("queue producer exited, starting producer")
                 producer = asyncio.create_task(self._run_producer(queues))
-            
+
+            if cron_task and cron_task.done():
+                self.logger.info("cron worker exited, starting new process")
+                cron_task = asyncio.create_task(self._run_cron())
+
             self.logger.debug("active workers: %d", self.active_workers)
 
             self.reap_workers()
@@ -180,7 +189,7 @@ class App:
         except Exception:
             self.logger.info("producer exited...")
 
-    def _run_worker(self, num_worker: int = 3):    
+    def _run_worker(self, num_worker: int = 3):
         for _ in range(num_worker):
             name = uuid.uuid4().hex
             task = asyncio.create_task(self.worker(name), name=name)
@@ -188,7 +197,13 @@ class App:
             task.add_done_callback(self.restart_worker)
 
     async def worker(self, name):
-        worker = Worker(self._tasks, self.driver, self.default_queue, name=name, task_timeout=self._task_timeout)
+        worker = Worker(
+            self._tasks,
+            self.driver,
+            self.default_queue,
+            name=name,
+            task_timeout=self._task_timeout,
+        )
         await worker.work(self.queue, max_tasks=self._worker_max_tasks)
 
     def restart_worker(self, task: asyncio.Task):
