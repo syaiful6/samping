@@ -8,16 +8,14 @@ logger = logging.getLogger("example")
 
 def driver():
     return SQSDriver(
-        endpoint_url="http://localhost:9324", use_ssl=False, prefetch_size=10
+        endpoint_url="http://localhost:9324", use_ssl=False, prefetch_size=30
     )
-
 
 app = App(
     driver_factory=driver,
-    queue_size=50,
     default_queue="samping",
     disable_cron=False,
-    worker_max_tasks=10,  # set to low to easy trigger
+    queue_size=0,
 )
 app.routes = []
 
