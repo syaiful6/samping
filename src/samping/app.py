@@ -39,6 +39,11 @@ class WorkerData(NamedTuple):
     task: asyncio.Task
 
 
+class WorkerData(NamedTuple):
+    name: str
+    task: asyncio.Task
+
+
 class App:
     def __init__(
         self,
@@ -48,6 +53,7 @@ class App:
         default_queue: str = "default",
         routes: Optional[List[Rule]] = None,
         disable_cron: bool = False,
+        worker_max_tasks: Optional[int] = None,
     ):
         self._task_timeout = task_timeout
         self._queue_size = queue_size
