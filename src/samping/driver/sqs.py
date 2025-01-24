@@ -17,7 +17,7 @@ from botocore.exceptions import ClientError
 from ..messages import Message
 from ..backoff import Backoff, Exponential
 from . import QueueDriver
-from ..utils import countdown, try_to_int
+from ..utils import countdown, try_to_int, utcnow
 
 T = TypeVar("T")
 
@@ -65,7 +65,6 @@ class SQSDriver(QueueDriver):
         self.batch_window = batch_window
         self.batch_size = min(batch_size, 20)
         self.logger = logging.getLogger("samping")
-        self._in_flight = 0
         self._prefetch_size = prefetch_size
 
     def sqs_client(self):
@@ -138,7 +137,7 @@ class SQSDriver(QueueDriver):
                 if len(messages) >= self.batch_size:
                     break
                 for max_num in countdown(
-                    max(self._prefetch_size - self._in_flight, 10),
+                    max(self._prefetch_size, 10),
                     min(self.batch_size, 10),
                 ):
                     current_sqs_messages = await sqs_queue.receive_messages(
@@ -163,21 +162,15 @@ class SQSDriver(QueueDriver):
         queue_names = list(filter(lambda x: x, queues.split(",")))
         while True:
             next_wait = 0
-            if self._in_flight < self._prefetch_size:
-                messages = await self._fetch_messages_on(queue_names)
-                if messages:
-                    self._backoff.reset()
-                    self._in_flight += len(messages)
-                    for message in messages:
-                        yield message
-                else:
-                    next_wait = self._backoff.next_backoff().total_seconds()
-                    self.logger.info("sqs: got empty messages")
+            messages = await self._fetch_messages_on(queue_names)
+            if messages:
+                self._backoff.reset()
+                self.logger.debug("sqs: got %d messages", len(messages))
+                for message in messages:
+                    yield message
             else:
                 next_wait = self._backoff.next_backoff().total_seconds()
-                self.logger.debug(
-                    f"waiting in {self._in_flight} flight message to be processed (max: {self._prefetch_size})"
-                )
+                self.logger.info("sqs: got empty messages")
 
             if next_wait == 0:
                 self._backoff.reset()
@@ -192,14 +185,12 @@ class SQSDriver(QueueDriver):
             sqs_queue = await self.get_queue(sqs, queue)
             message = await sqs_queue.Message(ack_id)
             await message.delete()
-            self._in_flight = max(0, self._in_flight - 1)
 
     async def send_nack(self, ack_id: str, queue: str = None, delay: int = 1):
         async with self.sqs_client() as sqs:
             sqs_queue = await self.get_queue(sqs, queue)
             message = await sqs_queue.Message(ack_id)
             await message.change_visibility(VisibilityTimeout=delay)
-            self._in_flight = max(0, self._in_flight - 1)
 
     async def decode_message(self, sqs_message, queue: str) -> Message:
         bodyStr = await sqs_message.body

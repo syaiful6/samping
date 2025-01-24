@@ -9,17 +9,34 @@ from typing import Optional, List, Callable, Union, Dict, NamedTuple
 
 from .driver import QueueDriver
 from .exceptions import Retry
-from .tasks import Task, CronJob
+from .tasks import Task, CronJob, TaskStatus
 from .messages import Message
 from .routes import route, Rule
-from .backoff import Exponential
-from .worker import Worker
+from .channel import channel, Sender
 from .utils import try_to_int, utcnow, parse_iso8601
 
 
 async def run_tab(logger, tab, name):
     logger.info("executing cron tab: %s", name)
     await tab.run()
+
+async def wrap_future(e, f):
+    return e, await f
+
+async def select(*futures):
+    done, pendings = await asyncio.wait(
+        [asyncio.ensure_future(wrap_future(label, fut)) for label, fut in futures],
+        return_when=asyncio.FIRST_COMPLETED
+    )
+    for task in pendings:
+        if not task.cancelled():
+            task.cancel()
+
+    return done
+
+class WorkerData(NamedTuple):
+    name: str
+    task: asyncio.Task
 
 
 class WorkerData(NamedTuple):
@@ -32,7 +49,7 @@ class App:
         self,
         driver_factory: Callable[[], QueueDriver],
         task_timeout: int = 300,
-        queue_size: int = 100,
+        queue_size: int = 0,
         default_queue: str = "default",
         routes: Optional[List[Rule]] = None,
         disable_cron: bool = False,
@@ -52,8 +69,7 @@ class App:
         self.disable_cron = disable_cron
         self.worker_dict: Dict[str, WorkerData] = {}
         self._num_worker = 0
-        self._stopping = False
-        self._worker_max_tasks = worker_max_tasks
+        self._stopping = asyncio.Event()
 
     def task_route(self, task: Task) -> str:
         queue = route(task.name, self.routes)
@@ -72,12 +88,6 @@ class App:
     @property
     def active_workers(self):
         return len(self.worker_dict)
-
-    @property
-    def queue(self):
-        if self._queue is None:
-            self._queue = asyncio.Queue(maxsize=self._queue_size)
-        return self._queue
 
     @property
     def loop(self):
@@ -144,9 +154,7 @@ class App:
 
     async def _signal_handler(self, signame):
         self.logger.info("receive signal %s! exiting", signame)
-        self._stopping = True
-        await self.queue.join()
-        self.loop.stop()
+        self._stopping.set()
 
     async def run_worker(self, queues: str, num_worker: int = 3):
         self.logger.info("starting %d workers processing queue %s", num_worker, queues)
@@ -156,74 +164,96 @@ class App:
                 lambda: asyncio.create_task(self._signal_handler(signame)),
             )
 
-        self._num_worker = num_worker
-        producer = asyncio.create_task(self._run_producer(queues))
+        msg_tx, msg_rx = channel(self._queue_size)
+
+        producer = asyncio.create_task(self._run_producer(msg_tx, queues))
+
         cron_task = None
         if not self.disable_cron:
             cron_task = asyncio.create_task(self._run_cron())
 
-        self._run_worker(num_worker)
+        workers = set()
+        semaphore = asyncio.Semaphore(num_worker)
+        
+        ev_tx, ev_rx = channel()
+
+        pending_tasks = 0
 
         while True:
-            if self._stopping:
+            selected = await select(
+                ("message", msg_rx.recv()),
+                ("ending", self._stopping.wait()),
+                ("task_event", ev_rx.recv()),
+            )
+
+            for task in selected:
+                which, result = task.result()
+                if which == "message":
+                    self.logger.debug("handle a task, current pending task: %d", pending_tasks)
+                    task = asyncio.create_task(self.execute_task(semaphore, ev_tx, result))
+                    workers.add(task)
+                    task.add_done_callback(workers.discard)
+                elif which == "ending":
+                    self.logger.info("Warm shutdown")
+                    break
+                elif which == "task_event":
+                    self.logger.debug("task event received: %s", result)
+                    if result == TaskStatus.PENDING:
+                        pending_tasks += 1
+                    elif result == TaskStatus.FINISHED:
+                        pending_tasks -= 1
+            else:
+                if producer.done():
+                    self.logger.info("queue producer exited, starting producer")
+                    producer = asyncio.create_task(self._run_producer(queues))
+
+                if cron_task and cron_task.done():
+                    self.logger.info("cron worker exited, starting new process")
+                    cron_task = asyncio.create_task(self._run_cron())
+
+                continue
+
+            break
+
+        if pending_tasks > 0:
+            while pending_tasks > 0:
+                selected = await select(
+                    ("ending", self._stopping.wait()),
+                    ("task_event", ev_rx.recv())
+                )
+                for task in selected:
+                    which, result = task.result()
+                    if which == "ending":
+                        self.logger.info("Okay fine, shutting down now. See ya!")
+                        break
+                    elif which == "task_event":
+                        if result == TaskStatus.PENDING:
+                            pending_tasks += 1
+                        elif result == TaskStatus.FINISHED:
+                            pending_tasks -= 1
+                else:
+                    continue
+
                 break
-            if producer.done():
-                self.logger.info("queue producer exited, starting producer")
-                producer = asyncio.create_task(self._run_producer(queues))
-
-            if cron_task and cron_task.done():
-                self.logger.info("cron worker exited, starting new process")
-                cron_task = asyncio.create_task(self._run_cron())
-
-            self.logger.debug("active workers: %d", self.active_workers)
-
-            self.reap_workers()
-
-            await asyncio.sleep(10)
-
-    async def _run_producer(self, queues: str):
-        try:
-            async for message in self.driver.consume(queues):
-                self.logger.debug("got a new task message, put it in internal queue")
-                await self.queue.put(message)
-        except Exception:
-            self.logger.info("producer exited...")
-
-    def _run_worker(self, num_worker: int = 3):
-        for _ in range(num_worker):
-            name = uuid.uuid4().hex
-            task = asyncio.create_task(self.worker(name), name=name)
-            self.worker_dict[name] = WorkerData(name=name, task=task)
-            task.add_done_callback(self.restart_worker)
-
-    async def worker(self, name):
-        worker = Worker(
-            self._tasks,
-            self.driver,
-            self.default_queue,
-            name=name,
-            task_timeout=self._task_timeout,
-        )
-        await worker.work(self.queue, max_tasks=self._worker_max_tasks)
-
-    def restart_worker(self, task: asyncio.Task):
-        name = task.get_name()
-        if name in self.worker_dict:
-            del self.worker_dict[name]
-        self.logger.info("Worker %s exiting: spawning new asyncio task", name)
-        self._run_worker(num_worker=1)
-
-    def reap_workers(self):
-        self.logger.debug("reaping dead workers")
-        worker_datas = list(self.worker_dict.values())
-        for data in worker_datas:
-            if data.task.done():
-                self.restart_worker(data.task)
 
     async def _run_cron(self):
         while True:
             await self.run_matched_tabs()
             await asyncio.sleep(60)
+
+    async def _run_producer(self, tx: Sender[Message], queues: str):
+        try:
+            async for message in self.driver.consume(queues):
+                self.logger.debug("got a new task message, put it in internal queue")
+                await tx.send(message)
+        except Exception:
+            self.logger.warning("producer exited...", exc_info=True)
+
+    async def execute_task(self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message):
+        async with sem:
+            await tx.send(TaskStatus.PENDING)
+            await self.handle_message(message, managed=True)
+            await tx.send(TaskStatus.FINISHED)
 
     def decode_sqs_events(self, sqs_messages: List[dict]) -> List[Message]:
         messages: List[Message] = []
@@ -258,8 +288,11 @@ class App:
         task_message = message.decode_task_message()
         queue_name = message.queue or self.default_queue
         if task_message.expires is not None and task_message.expires < utcnow():
+            self.logger.debug("task %s expired, deleting..", task.name)
             await self.driver.send_ack(message.ack_id, queue_name)
+            return
         if task_message.task not in self._tasks:
+            self.logger.debug("task %s not available in registered tasks, deleting.", task.name)
             await self.driver.send_ack(message.ack_id, queue_name)
             return
         task = self._tasks[task_message.task]
