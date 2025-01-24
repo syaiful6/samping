@@ -1,5 +1,6 @@
 from typing import Dict, List, TypedDict, Any, Union
 from datetime import datetime
+from enum import Enum
 import uuid
 
 from .exceptions import Retry
@@ -134,3 +135,8 @@ class CronJob:
 
     async def run(self):
         raise NotImplementedError("CronJob must define the run method.")
+
+
+class TaskStatus(Enum):
+    PENDING = 1
+    FINISHED = 2
