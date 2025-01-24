@@ -252,8 +252,10 @@ class App:
     async def execute_task(self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message):
         async with sem:
             await tx.send(TaskStatus.PENDING)
-            await self.handle_message(message, managed=True)
-            await tx.send(TaskStatus.FINISHED)
+            try:
+                await self.handle_message(message, managed=True)
+            finally:
+                await tx.send(TaskStatus.FINISHED)
 
     def decode_sqs_events(self, sqs_messages: List[dict]) -> List[Message]:
         messages: List[Message] = []

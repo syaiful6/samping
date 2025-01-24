@@ -101,6 +101,8 @@ class SQSDriver(QueueDriver):
     async def _send_batch(self, queue: str, messages: List[Message]):
         async with self.sqs_client() as sqs:
             sqs_queue = await self.get_queue(sqs, queue)
+            print(queue)
+            print(sqs_queue.url)
             async with BatchWriter(sqs_queue) as batch:
                 for id, message in enumerate(messages):
                     body = base64.standard_b64encode(message.body).decode()

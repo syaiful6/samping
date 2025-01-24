@@ -1,5 +1,6 @@
 from samping.driver.sqs import SQSDriver
 from samping.app import App
+from samping.routes import Rule
 import asyncio
 import logging
 
@@ -8,16 +9,23 @@ logger = logging.getLogger("example")
 
 def driver():
     return SQSDriver(
-        endpoint_url="http://localhost:9324", use_ssl=False, prefetch_size=30
+        endpoint_url="http://localhost:9324",
+        use_ssl=False,
+        prefetch_size=30,
+        visibility_timeout=60,
     )
+
 
 app = App(
     driver_factory=driver,
     default_queue="samping",
-    disable_cron=False,
-    queue_size=0,
+    disable_cron=True,
+    queue_size=60,
 )
-app.routes = []
+app.routes = [
+    Rule("test_*", "samping"),
+    Rule("buggy_*", "buggy"),
+]
 
 
 @app.task(name="test_task")

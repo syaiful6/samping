@@ -114,16 +114,17 @@ class Task:
         expires=None,
         **opts,
     ):
+        queue = queue or self._app.task_route(self)
         return await self._app._send_message(
             self.to_message(
                 args=args,
                 kwargs=kwargs,
                 task_id=task_id,
-                queue=queue or self._app.task_route(self),
+                queue=queue,
                 eta=eta,
                 expires=expires,
             ),
-            queue=None,
+            queue=queue,
             **opts,
         )
 
