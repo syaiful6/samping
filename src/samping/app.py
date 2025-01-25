@@ -13,7 +13,7 @@ from .tasks import Task, CronJob, TaskStatus
 from .messages import Message
 from .routes import route, Rule
 from .channel import channel, Sender
-from .utils import try_to_int, utcnow, parse_iso8601
+from .utils.format import try_to_int, utcnow, parse_iso8601
 
 
 async def run_tab(logger, tab, name):
@@ -53,7 +53,6 @@ class App:
         default_queue: str = "default",
         routes: Optional[List[Rule]] = None,
         disable_cron: bool = False,
-        worker_max_tasks: Optional[int] = None,
     ):
         self._task_timeout = task_timeout
         self._queue_size = queue_size

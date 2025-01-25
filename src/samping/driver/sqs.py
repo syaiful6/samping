@@ -17,7 +17,8 @@ from botocore.exceptions import ClientError
 from ..messages import Message
 from ..backoff import Backoff, Exponential
 from . import QueueDriver
-from ..utils import countdown, try_to_int, utcnow
+from ..utils.iterators import countdown
+from ..utils.format import try_to_int
 
 T = TypeVar("T")
 

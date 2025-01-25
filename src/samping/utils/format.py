@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 from pytz import FixedOffset, utc
 
+
 ISO8601_REGEX = re.compile(
     r"(?P<year>[0-9]{4})(-(?P<month>[0-9]{1,2})(-(?P<day>[0-9]{1,2})"
     r"((?P<separator>.)(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2})"
@@ -53,16 +54,6 @@ def to_iso_format(d: datetime) -> str:
         r = r[:-6] + "Z"
 
     return r
-
-
-def countdown(num: int, step: int):
-    while num > 0:
-        if num > step:
-            yield step
-        else:
-            yield num
-        num -= step
-
 
 def try_to_int(value: str, default: int = 0) -> int:
     try:

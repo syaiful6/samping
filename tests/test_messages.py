@@ -1,23 +1,29 @@
-import datetime
-from samping.messages import Message, TaskMessage
-
+from samping.messages import Message
+from samping.serialization import dumps
+from samping.utils.format import utcnow
+from samping.utils.compat import msgpack_dumps
 
 def test_encode_task_message():
-    task_message = TaskMessage("id", "test_encode")
-    body = task_message.encode()
-    message = Message("ack_id", body)
-    assert message.queue == ""
-    assert message.ack_id == "ack_id"
-    task_message_2 = message.decode_task_message()
+    task = {
+        "id": 9023,
+        "expires": utcnow()
+    }
+    content_type, content_encoding, data = dumps(task)
 
-    assert task_message.id == task_message_2.id
-    assert task_message.task == task_message_2.task
+    message = Message(data, "delivery_tag", content_type=content_type, content_encoding=content_encoding)
+    decoded = message.decode()
+
+    assert task.get("id") == decoded.get("id")
 
 
-def test_encode_message_with_eta():
-    task_message = TaskMessage("id", "test_encode", eta=datetime.datetime.now())
-    body = task_message.encode()
-    message = Message("ack_id", body)
-    task_message_2 = message.decode_task_message()
+def test_encode_task_legacy_message():
+    task = {
+        "id": 9023,
+        "expires": utcnow()
+    }
+    body = msgpack_dumps(task)
 
-    assert isinstance(task_message_2.eta, datetime.datetime)
+    message = Message(body, "delivery_tag")
+    decoded = message.decode()
+
+    assert task.get("id") == decoded.get("id")
