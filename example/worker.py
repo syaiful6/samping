@@ -1,10 +1,10 @@
-
 import argparse
 import logging
 import sys
 import asyncio
 
 from .app import app
+
 
 def run_worker(queues: str, num_worker: int):
     root = logging.getLogger()
