@@ -4,7 +4,7 @@ from enum import Enum
 import uuid
 
 from .exceptions import Retry
-from .messages import Message, TaskMessage
+from .messages import Message
 
 
 class TaskInfo(TypedDict):
@@ -123,9 +123,9 @@ class Task:
                 queue=queue,
                 eta=eta,
                 expires=expires,
+                **opts,
             ),
             queue=queue,
-            **opts,
         )
 
 
