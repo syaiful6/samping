@@ -1,17 +1,17 @@
 import argparse
 import asyncio
 import uuid
-from .app import test_task, buggy_task
+from .app import test_task, buggy_task, long_running_tasks
 
 
 def run_producer(number):
     
     async def producer():
-        await asyncio.gather(*[test_task.apply(
-            kwargs={"data": uuid.uuid4().hex}
-        ) for _ in range(number)])
-
-        await buggy_task.apply(args=[10])
+        # await asyncio.gather(*[test_task.apply(
+        #     kwargs={"data": uuid.uuid4().hex}
+        # ) for _ in range(number)])
+        await long_running_tasks.apply()
+        # await buggy_task.apply(args=[10])
 
     
     asyncio.run(producer())

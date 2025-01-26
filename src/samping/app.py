@@ -20,19 +20,22 @@ async def run_tab(logger, tab, name):
     logger.info("executing cron tab: %s", name)
     await tab.run()
 
+
 async def wrap_future(e, f):
     return e, await f
+
 
 async def select(*futures):
     done, pendings = await asyncio.wait(
         [asyncio.ensure_future(wrap_future(label, fut)) for label, fut in futures],
-        return_when=asyncio.FIRST_COMPLETED
+        return_when=asyncio.FIRST_COMPLETED,
     )
     for task in pendings:
         if not task.cancelled():
             task.cancel()
 
     return done
+
 
 class WorkerData(NamedTuple):
     name: str
@@ -174,7 +177,7 @@ class App:
 
         workers = set()
         semaphore = asyncio.Semaphore(num_worker)
-        
+
         ev_tx, ev_rx = channel()
 
         pending_tasks = 0
@@ -189,8 +192,12 @@ class App:
             for task in selected:
                 which, result = task.result()
                 if which == "message":
-                    self.logger.debug("handle a task, current pending task: %d", pending_tasks)
-                    task = asyncio.create_task(self.execute_task(semaphore, ev_tx, result))
+                    self.logger.debug(
+                        "handle a task, current pending task: %d", pending_tasks
+                    )
+                    task = asyncio.create_task(
+                        self.execute_task(semaphore, ev_tx, result)
+                    )
                     workers.add(task)
                     task.add_done_callback(workers.discard)
                 elif which == "ending":
@@ -218,8 +225,7 @@ class App:
         if pending_tasks > 0:
             while pending_tasks > 0:
                 selected = await select(
-                    ("ending", self._stopping.wait()),
-                    ("task_event", ev_rx.recv())
+                    ("ending", self._stopping.wait()), ("task_event", ev_rx.recv())
                 )
                 for task in selected:
                     which, result = task.result()
@@ -249,7 +255,9 @@ class App:
         except Exception:
             self.logger.warning("producer exited...", exc_info=True)
 
-    async def execute_task(self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message):
+    async def execute_task(
+        self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message
+    ):
         async with sem:
             await tx.send(TaskStatus.PENDING)
             try:
@@ -290,11 +298,18 @@ class App:
         task_message = message.decode_task_message()
         queue_name = message.queue or self.default_queue
         if task_message.expires is not None and task_message.expires < utcnow():
-            self.logger.debug("task %s expired, deleting..", task.name)
+            self.logger.debug(
+                "task %s with id %s expired, deleting..",
+                task_message.task,
+                task_message.id,
+            )
             await self.driver.send_ack(message.ack_id, queue_name)
             return
         if task_message.task not in self._tasks:
-            self.logger.debug("task %s not available in registered tasks, deleting.", task.name)
+            self.logger.debug(
+                "task %s not available in registered tasks, deleting.",
+                task_message.task,
+            )
             await self.driver.send_ack(message.ack_id, queue_name)
             return
         task = self._tasks[task_message.task]
@@ -315,8 +330,17 @@ class App:
                     )
             else:
                 raise exc
+        except asyncio.exceptions.TimeoutError as e:
+            self.logger.info("task %s timed out", task_message.task)
+            if managed:
+                if task_message.retries < message.receive_count:
+                    await self.driver.send_ack(message.ack_id, queue_name)
+                else:
+                    await self.driver.send_nack(message.ack_id, queue_name)
+            else:
+                raise e
         except Exception as exc:
-            self.logger.exception("handle task %s returned an error", task_message.task)
+            self.logger.exception("task %s returned an error", task_message.task)
             if managed:
                 if task_message.retries < message.receive_count:
                     await self.driver.send_ack(message.ack_id, queue_name)
