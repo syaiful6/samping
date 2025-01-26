@@ -1,7 +1,5 @@
 import typing
-import number
 from dataclasses import dataclass
-import msgpack
 from datetime import datetime
 from collections import namedtuple
 
@@ -60,8 +58,6 @@ class TaskMessageV1:
             "expires": to_iso_format(self.expires) if self.expires else None,
         }, "msgpack")
 
-        return data
-
 
 TaskMessageBody = namedtuple("MessageBody", ("args", "kwargs", "childrens"))
 
@@ -70,7 +66,7 @@ TaskMessageBody = namedtuple("MessageBody", ("args", "kwargs", "childrens"))
 class TaskMessageV2:
     headers: typing.Dict[str, str]
     properties: typing.Dict[str, str]
-    body: MessageBody
+    body: TaskMessageBody
 
     def encode(self, serializer):
         return dumps({

@@ -1,6 +1,6 @@
 import re
-from datetime import datetime
-from pytz import FixedOffset, utc
+from datetime import datetime, timezone
+from pytz import FixedOffset
 
 
 ISO8601_REGEX = re.compile(
@@ -21,7 +21,7 @@ def parse_iso8601(datestr: str) -> datetime:
     groups = m.groupdict()
     tz = groups["timezone"]
     if tz == "Z":
-        tz = FixedOffset(0)
+        tz = timezone.utc
     elif tz:
         m = TIMEZONE_REGEX.match(tz)
         prefix, hours, minutes = m.groups()
@@ -44,7 +44,7 @@ def parse_iso8601(datestr: str) -> datetime:
 
 def utcnow():
     t = datetime.utcnow()
-    return t.replace(tzinfo=utc)
+    return t.replace(tzinfo=timezone.utc)
 
 
 def to_iso_format(d: datetime) -> str:
@@ -54,6 +54,7 @@ def to_iso_format(d: datetime) -> str:
         r = r[:-6] + "Z"
 
     return r
+
 
 def try_to_int(value: str, default: int = 0) -> int:
     try:

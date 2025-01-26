@@ -1,32 +1,36 @@
 import asyncio
 import logging
-import base64
-from datetime import datetime
+from datetime import datetime, timezone
 from croniter import croniter
+from functools import cached_property
 import signal
 import uuid
-from typing import Optional, List, Callable, Union, Dict, NamedTuple
+from typing import Optional, List, Callable, Union, Dict
 
-from .driver import QueueDriver
-from .exceptions import Retry
-from .tasks import Task, CronJob, TaskStatus
-from .messages import Message
-from .routes import route, Rule
-from .channel import channel, Sender
-from .utils.format import try_to_int, utcnow, parse_iso8601
+from ..driver import QueueDriver
+from ..exceptions import Retry
+from ..tasks import Task, CronJob, TaskStatus
+from ..messages import Message
+from ..routes import route, Rule
+from ..channel import channel, Sender
+from ..utils.format import utcnow
+from ..utils.time import timezone as utils_timezone, to_utc
+from .conf import Conf
 
 
 async def run_tab(logger, tab, name):
     logger.info("executing cron tab: %s", name)
     await tab.run()
 
+
 async def wrap_future(e, f):
     return e, await f
+
 
 async def select(*futures):
     done, pendings = await asyncio.wait(
         [asyncio.ensure_future(wrap_future(label, fut)) for label, fut in futures],
-        return_when=asyncio.FIRST_COMPLETED
+        return_when=asyncio.FIRST_COMPLETED,
     )
     for task in pendings:
         if not task.cancelled():
@@ -34,14 +38,11 @@ async def select(*futures):
 
     return done
 
-class WorkerData(NamedTuple):
-    name: str
-    task: asyncio.Task
 
-
-class WorkerData(NamedTuple):
-    name: str
-    task: asyncio.Task
+default_conf = {
+    "timezone": None,
+    "task_serializer": "msgpack",
+}
 
 
 class App:
@@ -66,9 +67,9 @@ class App:
         self.default_queue = default_queue
         self.routes = routes or None
         self.disable_cron = disable_cron
-        self.worker_dict: Dict[str, WorkerData] = {}
         self._num_worker = 0
         self._stopping = asyncio.Event()
+        self._conf = Conf(default_conf)
 
     def task_route(self, task: Task) -> str:
         queue = route(task.name, self.routes)
@@ -87,6 +88,10 @@ class App:
     @property
     def active_workers(self):
         return len(self.worker_dict)
+
+    def now(self):
+        now_in_utc = to_utc(utcnow())
+        return now_in_utc.astimezone(self.timezone)
 
     @property
     def loop(self):
@@ -131,26 +136,6 @@ class App:
             except Exception as e:
                 self.logger.error(f"cron jobs exited with error: {e}")
 
-    def __call__(self, event: dict, context: dict):
-        if self.is_queue_event(event):
-            messages = self.decode_sqs_events(event["Records"])
-            self.logger.debug("receive sqs queue %d", len(messages))
-            self.on_receive_message(messages)
-        elif self.is_scheduled_event(event):
-            self.handle_scheduled_event(event)
-        else:
-            raise TypeError("Invalid SQS event or EventBridge event")
-
-    def is_scheduled_event(self, event: dict) -> bool:
-        return event.get("source", "") == "aws.events" and "time" in event
-
-    def is_queue_event(self, event: dict) -> bool:
-        return (
-            "Records" in event
-            and len(event["Records"]) > 0
-            and "body" in event["Records"][0]
-        )
-
     async def _signal_handler(self, signame):
         self.logger.info("receive signal %s! exiting", signame)
         self._stopping.set()
@@ -173,7 +158,7 @@ class App:
 
         workers = set()
         semaphore = asyncio.Semaphore(num_worker)
-        
+
         ev_tx, ev_rx = channel()
 
         pending_tasks = 0
@@ -188,8 +173,12 @@ class App:
             for task in selected:
                 which, result = task.result()
                 if which == "message":
-                    self.logger.debug("handle a task, current pending task: %d", pending_tasks)
-                    task = asyncio.create_task(self.execute_task(semaphore, ev_tx, result))
+                    self.logger.debug(
+                        "handle a task, current pending task: %d", pending_tasks
+                    )
+                    task = asyncio.create_task(
+                        self.execute_task(semaphore, ev_tx, result)
+                    )
                     workers.add(task)
                     task.add_done_callback(workers.discard)
                 elif which == "ending":
@@ -217,8 +206,7 @@ class App:
         if pending_tasks > 0:
             while pending_tasks > 0:
                 selected = await select(
-                    ("ending", self._stopping.wait()),
-                    ("task_event", ev_rx.recv())
+                    ("ending", self._stopping.wait()), ("task_event", ev_rx.recv())
                 )
                 for task in selected:
                     which, result = task.result()
@@ -248,37 +236,15 @@ class App:
         except Exception:
             self.logger.warning("producer exited...", exc_info=True)
 
-    async def execute_task(self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message):
+    async def execute_task(
+        self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message
+    ):
         async with sem:
             await tx.send(TaskStatus.PENDING)
             try:
                 await self.handle_message(message, managed=True)
             finally:
                 await tx.send(TaskStatus.FINISHED)
-
-    def decode_sqs_events(self, sqs_messages: List[dict]) -> List[Message]:
-        messages: List[Message] = []
-        for sqs_message in sqs_messages:
-            body = base64.standard_b64decode(sqs_message.get("body", ""))
-            attributes = sqs_message.get("attributes", {})
-            receiptHandle = sqs_message.get("receiptHandle", "")
-            queue = sqs_message.get("eventSourceARN", "").split(":")[-1]
-            messages.append(
-                Message(
-                    receiptHandle,
-                    body,
-                    queue=queue,
-                    receive_count=try_to_int(
-                        attributes.get("ApproximateReceiveCount", 0)
-                    ),
-                )
-            )
-        return messages
-
-    def on_receive_message(self, messages: List[Message]):
-        handle_message_instance = self.handle_messages(messages, managed=False)
-        handle_message_task = self.loop.create_task(handle_message_instance)
-        self.loop.run_until_complete(handle_message_task)
 
     async def handle_messages(self, messages: List[Message], managed: bool = True):
         await asyncio.gather(
@@ -293,7 +259,9 @@ class App:
             await self.driver.send_ack(message.ack_id, queue_name)
             return
         if task_message.task not in self._tasks:
-            self.logger.debug("task %s not available in registered tasks, deleting.", task.name)
+            self.logger.debug(
+                "task %s not available in registered tasks, deleting.", task.name
+            )
             await self.driver.send_ack(message.ack_id, queue_name)
             return
         task = self._tasks[task_message.task]
@@ -337,19 +305,6 @@ class App:
         return await self.driver.send_batch(
             queue=queue or self.default_queue, messages=messages, **kwargs
         )
-
-    def handle_scheduled_event(self, event: dict):
-        if self.is_scheduled_event(event):
-            try:
-                event_time = parse_iso8601(event.get("time", ""))
-            except ValueError:
-                event_time = None
-
-            cron_instance = self.run_matched_tabs(current_date=event_time)
-            cron_task = self.loop.create_task(cron_instance)
-            self.loop.run_until_complete(cron_task)
-        else:
-            raise TypeError("not an event bridge event")
 
     def _task_from_fun(self, fun, base=None, name=None, bind=False, **options) -> Task:
         name = name or self.gen_task_name(fun.__name__, fun.__module__)
@@ -420,3 +375,16 @@ class App:
 
     def gen_task_name(self, name: str, module_name: str) -> str:
         return ".".join(p for p in (module_name, name) if p)
+
+    @property
+    def conf(self):
+        """Current configuration"""
+        return self._conf
+
+    @cached_property
+    def timezone(self):
+        conf = self.conf
+        if not conf.timezone:
+            return timezone.utc
+
+        return utils_timezone.get_timezone(conf.timezone)

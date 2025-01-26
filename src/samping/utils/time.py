@@ -12,11 +12,10 @@ from datetime import timezone as datetime_timezone
 from datetime import tzinfo
 from types import ModuleType
 from typing import Any, Callable
+from functools import cached_property
 
 from dateutil import tz as dateutil_tz
 from dateutil.parser import isoparse
-from kombu.utils.functional import reprcall
-from kombu.utils.objects import cached_property
 
 from .iterators import dictfilter
 from .text import pluralize
@@ -391,10 +390,6 @@ class ffwd:
         self.microsecond = microsecond
         self.days = weeks * 7
         self._has_time = self.hour is not None or self.minute is not None
-
-    def __repr__(self) -> str:
-        return reprcall('ffwd', (), self._fields(weeks=self.weeks,
-                                                 weekday=self.weekday))
 
     def __radd__(self, other: Any) -> timedelta:
         if not isinstance(other, date):

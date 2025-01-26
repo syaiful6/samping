@@ -1,6 +1,6 @@
 import datetime
 
-from samping.messages import Message, TaskMessageV1, TaskMessageV2, MessageBody
+from samping.messages import Message, TaskMessageV1, TaskMessageV2, TaskMessageBody
 from samping.serialization import dumps
 from samping.utils.format import utcnow
 from samping.utils.compat import msgpack_dumps
@@ -34,7 +34,7 @@ def test_encode_task_legacy_message():
 
 def test_encode_task_messagev1_with_eta():
     task_message = TaskMessageV1(id="id", task="test_encode", eta=datetime.datetime.now())
-    body = task_message.encode()
+    _, _, body = task_message.encode()
     assert isinstance(body, bytes)
     message = Message(body=body, delivery_tag="delivery_tag")
     task_message_2 = TaskMessageV1.from_dict(message.decode())
@@ -53,8 +53,10 @@ def test_encode_task_message_v2():
             "correlation_id": "task_id",
             "reply_to": "",
         },
-        body=MessageBody([], {}, {"callbacks": None, "errbacks": None, "chain": None, "chord": None})
+        body=TaskMessageBody([], {}, {"callbacks": None, "errbacks": None, "chain": None, "chord": None})
     )
     content_type, encoding, data = task.encode("json")
 
-    assert content_type == "application"
+    assert content_type == "application/json"
+    assert encoding == "utf-8"
+    assert isinstance(data, str)
