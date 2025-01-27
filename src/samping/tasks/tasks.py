@@ -5,10 +5,10 @@ from collections.abc import Mapping
 import uuid
 import numbers
 
-from .exceptions import Retry
-from .utils.time import maybe_make_aware
-from .utils.format import to_iso_format
-from .messages import Message, TaskMessageV1, TaskMessageV2, TaskMessageBody
+from ..exceptions import Retry
+from ..utils.time import maybe_make_aware
+from ..utils.format import to_iso_format
+from ..messages import Message, MessageBodyV1, MessageBodyV2, ProtocolVersion
 
 
 #: earliest date supported by time.mktime.
@@ -61,6 +61,8 @@ class Task:
 
     serializer = None
 
+    protocol_version = ProtocolVersion.V2
+
     __bound__ = False
 
     def retry(self, exc=None, when=None, **kwargs):
@@ -101,11 +103,17 @@ class Task:
         expires=None,
         timezone=None,
         **options,
-    ):
+    ) -> Message:
         if not task_id:
             task_id = str(uuid.uuid4())
 
-        task_message = self.as_task_message_v2(
+        as_message = (
+            self.as_message_v2
+            if self.protocol_version == ProtocolVersion.V2
+            else self.as_message_v1
+        )
+
+        return as_message(
             task_id=task_id,
             name=self.name,
             args=args,
@@ -113,15 +121,11 @@ class Task:
             eta=eta,
             expires=expires,
             timezone=timezone,
+            retries=self.max_retries,
             **options,
         )
 
-        content_type, content_encoding, data = task_message.encode(self.serializer)
-        return Message(
-            body=data, content_type=content_type, content_encoding=content_encoding
-        )
-
-    def as_task_message_v2(
+    def as_message_v2(
         self,
         task_id,
         name,
@@ -167,29 +171,86 @@ class Task:
             "expires": expires,
             "group": options.get("group", None),
             "group_id": options.get("group_id", None),
-            "retries": self.max_retries,
+            "retries": options.get("retries", 3),
             "root_id": root_id,
             "parent_id": options.get("parent_id", None),
             "origin": "",
             "ignore_result": options.get("ignore_result", False),
             "replaced_task_nesting": options.get("replaced_task_nesting", 0),
         }
-        return TaskMessageV2(
+
+        body = MessageBodyV2(
+            args=args,
+            kwargs=kwargs,
+            embeds={
+                "callbacks": options.get("callbacks", None),
+                "errbacks": options.get("errbacks", None),
+                "chain": options.get("chain", None),
+                "chord": options.get("chord"),
+            },
+        )
+
+        content_type, content_encoding, data = body.encode(self.serializer)
+
+        return Message(
             headers=headers,
+            content_type=content_type,
+            content_encoding=content_encoding,
             properties={
                 "correlation_id": task_id,
                 "reply_to": reply_to,
             },
-            body=TaskMessageBody(
-                args,
-                kwargs,
-                {
-                    "callbacks": options.get("callbacks", None),
-                    "errbacks": options.get("errbacks", None),
-                    "chain": options.get("chain", None),
-                    "chord": options.get("chord"),
-                },
-            ),
+            body=data,
+        )
+
+    def as_message_v1(
+        self,
+        task_id,
+        name,
+        args=None,
+        kwargs=None,
+        eta=None,
+        expires=None,
+        timezone=None,
+        **options,
+    ):
+        args = args or ()
+        kwargs = kwargs or {}
+
+        if not isinstance(args, (list, tuple)):
+            raise TypeError("task args must be a list or tuple")
+        if not isinstance(kwargs, Mapping):
+            raise TypeError("task keyword arguments must be a mapping")
+
+        if task_id is None:
+            task_id = str(uuid.uuid4())
+
+        if isinstance(expires, numbers.Real):
+            self._verify_seconds(expires, "expires")
+            timezone = timezone or self.app.timezone
+            expires = maybe_make_aware(
+                self.app.now() + timedelta(seconds=expires), tz=timezone
+            )
+
+        if not isinstance(eta, str):
+            eta = eta and to_iso_format(eta)
+
+        body = MessageBodyV1(
+            id=task_id,
+            task=self.name,
+            args=args,
+            kwargs=kwargs,
+            retries=self.max_retries,
+            eta=eta,
+            expires=expires,
+        )
+        content_type, content_encoding, data = body.encode()
+
+        return Message(
+            headers={},
+            content_type=content_type,
+            content_encoding=content_encoding,
+            body=data,
         )
 
     async def batch(self, batches: List[TaskInfo], queue: str = None):
@@ -200,8 +261,8 @@ class Task:
 
     async def apply(
         self,
-        args=[],
-        kwargs={},
+        args=None,
+        kwargs=None,
         task_id: str = None,
         queue=None,
         eta=None,

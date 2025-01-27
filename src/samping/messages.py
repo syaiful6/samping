@@ -1,11 +1,16 @@
 import typing
 from dataclasses import dataclass
 from datetime import datetime
-from collections import namedtuple
+from enum import Enum
 
 from .serialization import loads, dumps
 from .exceptions import DecodeError
 from .utils.format import to_iso_format, parse_iso8601
+
+
+class ProtocolVersion(Enum):
+    V1 = "v1"
+    V2 = "v2"
 
 
 @dataclass
@@ -21,14 +26,16 @@ class Message:
 
     def decode(self):
         try:
-            return loads(self.body, self.content_type, self.content_encoding, self.accept)
+            return loads(
+                self.body, self.content_type, self.content_encoding, self.accept
+            )
         except DecodeError:
             # the legacy one use msgpack
-            return loads(self.body,  "application/x-msgpack", "binary")
+            return loads(self.body, "application/x-msgpack", "binary")
 
 
 @dataclass
-class TaskMessageV1:
+class MessageBodyV1:
     id: str
     task: str
     args: typing.Optional[typing.List[typing.Any]] = None
@@ -36,6 +43,12 @@ class TaskMessageV1:
     retries: int = 3
     eta: typing.Optional[datetime] = None
     expires: typing.Optional[datetime] = None
+    taskset: typing.Optional[str] = None
+    chord: typing.Optional[typing.List[typing.Any]] = None
+    utc: bool = True
+    callbacks: typing.Optional[typing.List[typing.Any]] = None
+    errbacks: typing.Optional[typing.List[typing.Any]] = None
+    timelimit: typing.Optional[typing.Tuple[float, float]] = None
 
     @classmethod
     def from_dict(cls, messages):
@@ -48,32 +61,28 @@ class TaskMessageV1:
         return cls(**messages)
 
     def encode(self):
-        return dumps({
-            "id": self.id,
-            "task": self.task,
-            "args": self.args,
-            "kwargs": self.kwargs,
-            "retries": self.retries,
-            "eta": to_iso_format(self.eta) if self.eta else None,
-            "expires": to_iso_format(self.expires) if self.expires else None,
-        }, "msgpack")
-
-
-TaskMessageBody = namedtuple("MessageBody", ("args", "kwargs", "childrens"))
+        return dumps(
+            {
+                "id": self.id,
+                "task": self.task,
+                "args": self.args,
+                "kwargs": self.kwargs,
+                "retries": self.retries,
+                "eta": to_iso_format(self.eta) if self.eta else None,
+                "expires": to_iso_format(self.expires) if self.expires else None,
+            },
+            "msgpack",
+        )
 
 
 @dataclass
-class TaskMessageV2:
-    headers: typing.Dict[str, str]
-    properties: typing.Dict[str, str]
-    body: TaskMessageBody
+class MessageBodyV2:
+    args: typing.List[typing.Any]
+    kwargs: typing.Dict[str, typing.Any]
+    embeds: typing.Dict[str, typing.Any]
 
     def encode(self, serializer):
-        return dumps({
-            "headers": self.headers,
-            "properties": self.properties,
-            "body": self.body,
-        }, serializer)
+        return dumps((self.args, self.kwargs, self.embeds), serializer)
 
 
-TaskMessage = TaskMessageV2
+TaskMessage = MessageBodyV2

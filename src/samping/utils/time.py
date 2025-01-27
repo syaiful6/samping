@@ -27,33 +27,58 @@ else:
 
 
 __all__ = (
-    'LocalTimezone', 'timezone', 'maybe_timedelta',
-    'delta_resolution', 'remaining', 'rate', 'weekday',
-    'humanize_seconds', 'maybe_iso8601', 'is_naive',
-    'make_aware', 'localize', 'to_utc', 'maybe_make_aware',
-    'ffwd', 'utcoffset', 'adjust_timestamp',
-    'get_exponential_backoff_interval',
+    "LocalTimezone",
+    "timezone",
+    "maybe_timedelta",
+    "delta_resolution",
+    "remaining",
+    "rate",
+    "weekday",
+    "humanize_seconds",
+    "maybe_iso8601",
+    "is_naive",
+    "make_aware",
+    "localize",
+    "to_utc",
+    "maybe_make_aware",
+    "ffwd",
+    "utcoffset",
+    "adjust_timestamp",
+    "get_exponential_backoff_interval",
 )
 
-C_REMDEBUG = os.environ.get('C_REMDEBUG', False)
+C_REMDEBUG = os.environ.get("C_REMDEBUG", False)
 
-DAYNAMES = 'sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'
+DAYNAMES = "sun", "mon", "tue", "wed", "thu", "fri", "sat"
 WEEKDAYS = dict(zip(DAYNAMES, range(7)))
 
-MONTHNAMES = 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
+MONTHNAMES = (
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+)
 YEARMONTHS = dict(zip(MONTHNAMES, range(1, 13)))
 
 RATE_MODIFIER_MAP = {
-    's': lambda n: n,
-    'm': lambda n: n / 60.0,
-    'h': lambda n: n / 60.0 / 60.0,
+    "s": lambda n: n,
+    "m": lambda n: n / 60.0,
+    "h": lambda n: n / 60.0 / 60.0,
 }
 
 TIME_UNITS = (
-    ('day', 60 * 60 * 24.0, lambda n: format(n, '.2f')),
-    ('hour', 60 * 60.0, lambda n: format(n, '.2f')),
-    ('minute', 60.0, lambda n: format(n, '.2f')),
-    ('second', 1.0, lambda n: format(n, '.2f')),
+    ("day", 60 * 60 * 24.0, lambda n: format(n, ".2f")),
+    ("hour", 60 * 60.0, lambda n: format(n, ".2f")),
+    ("minute", 60.0, lambda n: format(n, ".2f")),
+    ("second", 1.0, lambda n: format(n, ".2f")),
 )
 
 ZERO = timedelta(0)
@@ -83,7 +108,7 @@ class LocalTimezone(tzinfo):
         super().__init__()
 
     def __repr__(self) -> str:
-        return f'<LocalTimezone: UTC{int(self.DSTOFFSET.total_seconds() / 3600):+03d}>'
+        return f"<LocalTimezone: UTC{int(self.DSTOFFSET.total_seconds() / 3600):+03d}>"
 
     def utcoffset(self, dt: datetime) -> timedelta:
         return self.DSTOFFSET if self._isdst(dt) else self.STDOFFSET
@@ -102,13 +127,22 @@ class LocalTimezone(tzinfo):
             tz = self._offset_cache[offset]
         except KeyError:
             tz = self._offset_cache[offset] = datetime_timezone(
-                timedelta(minutes=offset))
+                timedelta(minutes=offset)
+            )
         return tz.fromutc(dt.replace(tzinfo=tz))
 
     def _isdst(self, dt: datetime) -> bool:
-        tt = (dt.year, dt.month, dt.day,
-              dt.hour, dt.minute, dt.second,
-              dt.weekday(), 0, 0)
+        tt = (
+            dt.year,
+            dt.month,
+            dt.day,
+            dt.hour,
+            dt.minute,
+            dt.second,
+            dt.weekday(),
+            0,
+            0,
+        )
         stamp = _time.mktime(tt)
         tt = _time.localtime(stamp)
         return tt.tm_isdst > 0
@@ -164,7 +198,7 @@ class _Zone:
     @cached_property
     def utc(self) -> tzinfo:
         """Return UTC timezone created with ZoneInfo."""
-        return self.get_timezone('UTC')
+        return self.get_timezone("UTC")
 
 
 timezone = _Zone()
@@ -189,9 +223,11 @@ def delta_resolution(dt: datetime, delta: timedelta) -> datetime:
     """
     delta = max(delta.total_seconds(), 0)
 
-    resolutions = ((3, lambda x: x / 86400),
-                   (4, lambda x: x / 3600),
-                   (5, lambda x: x / 60))
+    resolutions = (
+        (3, lambda x: x / 86400),
+        (4, lambda x: x / 3600),
+        (5, lambda x: x / 60),
+    )
 
     args = dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
     for res, predicate in resolutions:
@@ -201,8 +237,11 @@ def delta_resolution(dt: datetime, delta: timedelta) -> datetime:
 
 
 def remaining(
-        start: datetime, ends_in: timedelta, now: Callable | None = None,
-        relative: bool = False) -> timedelta:
+    start: datetime,
+    ends_in: timedelta,
+    now: Callable | None = None,
+    relative: bool = False,
+) -> timedelta:
     """Calculate the remaining time for a start date and a timedelta.
 
     For example, "how many seconds left for 30 seconds after start?"
@@ -220,9 +259,7 @@ def remaining(
         ~datetime.timedelta: Remaining time.
     """
     now = now or datetime.now(datetime_timezone.utc)
-    if str(
-            start.tzinfo) == str(
-            now.tzinfo) and now.utcoffset() != start.utcoffset():
+    if str(start.tzinfo) == str(now.tzinfo) and now.utcoffset() != start.utcoffset():
         # DST started/ended
         start = start.replace(tzinfo=now.tzinfo)
     end_date = start + ends_in
@@ -230,8 +267,11 @@ def remaining(
         end_date = delta_resolution(end_date, ends_in).replace(microsecond=0)
     ret = end_date - now
     if C_REMDEBUG:  # pragma: no cover
-        print('rem: NOW:{!r} START:{!r} ENDS_IN:{!r} END_DATE:{} REM:{}'.format(
-            now, start, ends_in, end_date, ret))
+        print(
+            "rem: NOW:{!r} START:{!r} ENDS_IN:{!r} END_DATE:{} REM:{}".format(
+                now, start, ends_in, end_date, ret
+            )
+        )
     return ret
 
 
@@ -239,8 +279,8 @@ def rate(r: str) -> float:
     """Convert rate string (`"100/m"`, `"2/h"` or `"0.5/s"`) to seconds."""
     if r:
         if isinstance(r, str):
-            ops, _, modifier = r.partition('/')
-            return RATE_MODIFIER_MAP[modifier or 's'](float(ops)) or 0
+            ops, _, modifier = r.partition("/")
+            return RATE_MODIFIER_MAP[modifier or "s"](float(ops)) or 0
         return r or 0
     return 0
 
@@ -276,8 +316,12 @@ def yearmonth(name: str) -> int:
 
 
 def humanize_seconds(
-        secs: int, prefix: str = '', sep: str = '', now: str = 'now',
-        microseconds: bool = False) -> str:
+    secs: int,
+    prefix: str = "",
+    sep: str = "",
+    now: str = "now",
+    microseconds: bool = False,
+) -> str:
     """Show seconds in human form.
 
     For example, 60 becomes "1 minute", and 7200 becomes "2 hours".
@@ -288,15 +332,13 @@ def humanize_seconds(
         now (str): Literal 'now'.
         microseconds (bool): Include microseconds.
     """
-    secs = float(format(float(secs), '.2f'))
+    secs = float(format(float(secs), ".2f"))
     for unit, divider, formatter in TIME_UNITS:
         if secs >= divider:
             w = secs / float(divider)
-            return '{}{}{} {}'.format(prefix, sep, formatter(w),
-                                      pluralize(w, unit))
+            return "{}{}{} {}".format(prefix, sep, formatter(w), pluralize(w, unit))
     if microseconds and secs > 0.0:
-        return '{prefix}{sep}{0:.2f} seconds'.format(
-            secs, sep=sep, prefix=prefix)
+        return "{prefix}{sep}{0:.2f} seconds".format(secs, sep=sep, prefix=prefix)
     return now
 
 
@@ -359,14 +401,16 @@ def to_utc(dt: datetime) -> datetime:
     return make_aware(dt, timezone.utc)
 
 
-def maybe_make_aware(dt: datetime, tz: tzinfo | None = None,
-                     naive_as_utc: bool = True) -> datetime:
+def maybe_make_aware(
+    dt: datetime, tz: tzinfo | None = None, naive_as_utc: bool = True
+) -> datetime:
     """Convert dt to aware datetime, do nothing if dt is already aware."""
     if is_naive(dt):
         if naive_as_utc:
             dt = to_utc(dt)
         return localize(
-            dt, timezone.utc if tz is None else timezone.tz_or_local(tz),
+            dt,
+            timezone.utc if tz is None else timezone.tz_or_local(tz),
         )
     return dt
 
@@ -374,9 +418,19 @@ def maybe_make_aware(dt: datetime, tz: tzinfo | None = None,
 class ffwd:
     """Version of ``dateutil.relativedelta`` that only supports addition."""
 
-    def __init__(self, year=None, month=None, weeks=0, weekday=None, day=None,
-                 hour=None, minute=None, second=None, microsecond=None,
-                 **kwargs: Any):
+    def __init__(
+        self,
+        year=None,
+        month=None,
+        weeks=0,
+        weekday=None,
+        day=None,
+        hour=None,
+        minute=None,
+        second=None,
+        microsecond=None,
+        **kwargs: Any,
+    ):
         # pylint: disable=redefined-outer-name
         # weekday is also a function in outer scope.
         self.year = year
@@ -397,44 +451,51 @@ class ffwd:
         year = self.year or other.year
         month = self.month or other.month
         day = min(monthrange(year, month)[1], self.day or other.day)
-        ret = other.replace(**dict(dictfilter(self._fields()),
-                                   year=year, month=month, day=day))
+        ret = other.replace(
+            **dict(dictfilter(self._fields()), year=year, month=month, day=day)
+        )
         if self.weekday is not None:
             ret += timedelta(days=(7 - ret.weekday() + self.weekday) % 7)
         return ret + timedelta(days=self.days)
 
     def _fields(self, **extra: Any) -> dict[str, Any]:
-        return dictfilter({
-            'year': self.year, 'month': self.month, 'day': self.day,
-            'hour': self.hour, 'minute': self.minute,
-            'second': self.second, 'microsecond': self.microsecond,
-        }, **extra)
+        return dictfilter(
+            {
+                "year": self.year,
+                "month": self.month,
+                "day": self.day,
+                "hour": self.hour,
+                "minute": self.minute,
+                "second": self.second,
+                "microsecond": self.microsecond,
+            },
+            **extra,
+        )
 
 
 def utcoffset(
-        time: ModuleType = _time,
-        localtime: Callable[..., _time.struct_time] = _time.localtime) -> float:
+    time: ModuleType = _time,
+    localtime: Callable[..., _time.struct_time] = _time.localtime,
+) -> float:
     """Return the current offset to UTC in hours."""
     if localtime().tm_isdst:
         return time.altzone // 3600
     return time.timezone // 3600
 
 
-def adjust_timestamp(ts: float, offset: int,
-                     here: Callable[..., float] = utcoffset) -> float:
+def adjust_timestamp(
+    ts: float, offset: int, here: Callable[..., float] = utcoffset
+) -> float:
     """Adjust timestamp based on provided utcoffset."""
     return ts - (offset - here()) * 3600
 
 
 def get_exponential_backoff_interval(
-    factor: int,
-    retries: int,
-    maximum: int,
-    full_jitter: bool = False
+    factor: int, retries: int, maximum: int, full_jitter: bool = False
 ) -> int:
     """Calculate the exponential backoff wait time."""
     # Will be zero if factor equals 0
-    countdown = min(maximum, factor * (2 ** retries))
+    countdown = min(maximum, factor * (2**retries))
     # Full jitter according to
     # https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
     if full_jitter:

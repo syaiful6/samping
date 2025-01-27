@@ -3,6 +3,7 @@ from typing import TypeVar, Generic, Tuple
 
 T = TypeVar("T")
 
+
 class Sender(Generic[T]):
     def __init__(self, queue: asyncio.Queue[T]):
         self._queue = queue
@@ -20,14 +21,14 @@ class Receiver(Generic[T]):
         self._queue.task_done()
 
         return value
-    
+
     async def with_recv(self, action):
         value = await self._queue.get()
         await action(value)
         self._queue.task_done()
-    
 
-def channel(maxsize = 0) -> Tuple[Sender[T], Receiver[T]]:
+
+def channel(maxsize=0) -> Tuple[Sender[T], Receiver[T]]:
     queue = asyncio.Queue(maxsize=maxsize)
 
     return Sender(queue), Receiver(queue)
