@@ -110,9 +110,32 @@ class Request:
             errbacks=task_message.errbacks,
         )
 
+    @property
+    def is_delayed(self):
+        """Check if the request has a future ETA"""
+        return self.eta is not None
+
+    def countdown(self, now=None):
+        """Get the TTL in seconds if the task has a future ETA."""
+        if not self.eta:
+            return None
+        now = now or self.app.now
+        countdown = (self.eta - now()).total_seconds()
+        return None if countdown < 0 else countdown
+
+    def is_expired(self, now=None):
+        """Check if the request is expired"""
+        if self.expires is None:
+            return False
+        now = now or self.app.now
+        return (now() - self.expires).total_seconds() >= 0
+
 
 def get_time_limit(time_limit):
     if not time_limit:
+        return time_limit
+
+    if isinstance(time_limit, (int, float)):
         return time_limit
 
     soft_limit, hard_limit = time_limit

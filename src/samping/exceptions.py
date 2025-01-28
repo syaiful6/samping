@@ -38,6 +38,24 @@ class Retry(TaskPredicate):
         super().__init__(self, exc, when, **kwargs)
 
 
+class TaskExpectedError(TaskPredicate):
+    """An error that is expected to happen every once in a while"""
+
+
+class TaskTimeout(TaskPredicate):
+    """Raised when a task runs over its time limit specified by the
+    `time_limit` setting
+    """
+
+
+class TraceError(SampingError):
+    """Errors that can occur while tracing a task"""
+
+
+class TaskExpirationError(TraceError):
+    """Raised when an expired task is received"""
+
+
 class OperationalError(SampingError):
     """Recoverable message transport connection error."""
 

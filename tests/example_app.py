@@ -19,8 +19,6 @@ def driver():
 app = App(
     driver_factory=driver,
     default_queue="samping",
-    disable_cron=True,
-    queue_size=60,
 )
 app.routes = [
     Rule("test_*", "samping"),
@@ -38,4 +36,10 @@ async def test_task(data: str):
 async def test_task_v1(wait: int):
     logger.info("test_task_v1 called with wait: %d", wait)
     await asyncio.sleep(wait)
-    raise RuntimeError("buggy")
+    return f"waiting completed: {wait}"
+
+
+@app.tab(name="print_each_minute")
+async def print_each_minute():
+    logger.info("crontab print each minute executed")
+    await asyncio.sleep(2)

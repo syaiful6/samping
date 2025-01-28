@@ -1,5 +1,6 @@
 from .example_app import test_task, test_task_v1
 from samping.tasks.request import Request
+import pytest
 
 
 def test_task_as_message():
@@ -34,3 +35,21 @@ def test_create_request_from_message_v1():
 
     assert request.args == [30]
     assert request.expires is not None
+
+
+@pytest.mark.asyncio
+async def test_create_task_executiong_v1():
+    msg = test_task_v1.to_message(args=[3], expires=30)
+    task = test_task_v1.from_request(Request.from_message(test_task_v1.app, msg))
+
+    assert task.name == test_task_v1.name
+    assert task.run == test_task_v1.run
+    assert task.request is not None
+
+    assert test_task_v1.request is None
+
+    assert task.app is not None
+
+    result = await task.run(*task.request.args, **task.request.kwargs)
+
+    assert result == "waiting completed: 3"
