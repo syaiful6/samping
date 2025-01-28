@@ -204,6 +204,10 @@ class _Zone:
 timezone = _Zone()
 
 
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
 def maybe_timedelta(delta: int) -> timedelta:
     """Convert integer to timedelta, if argument is an integer."""
     if isinstance(delta, numbers.Real):
@@ -502,3 +506,12 @@ def get_exponential_backoff_interval(
         countdown = random.randrange(countdown + 1)
     # Adjust according to maximum wait time and account for negative values.
     return max(0, countdown)
+
+
+def maybe_eta_delay_seconds(eta: str | None):
+    if not eta:
+        return None
+    parsed = isoparse(eta)
+    seconds = round((parsed - utcnow()).total_seconds())
+
+    return seconds if seconds > 0 else None

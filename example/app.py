@@ -19,8 +19,6 @@ def driver():
 app = App(
     driver_factory=driver,
     default_queue="samping",
-    disable_cron=True,
-    queue_size=60,
 )
 app.routes = [
     Rule("test_*", "samping"),

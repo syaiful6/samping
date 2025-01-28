@@ -2,6 +2,8 @@ import typing
 from datetime import datetime
 from dataclasses import dataclass
 from ..messages import Message, MessageBodyV1
+from ..utils.format import try_to_int
+from ..utils.time import maybe_iso8601
 
 
 @dataclass
@@ -26,9 +28,6 @@ class Request:
 
     # the unique id of the task's group, if this task is a member.
     group: typing.Optional[str] = None
-
-    # The unique ID of the chord this task belongs to
-    chord: typing.Optional[str] = None
 
     # Name of the host that sent this task
     origin: typing.Optional[str] = None
@@ -70,15 +69,18 @@ class Request:
     def from_message_v2(cls, app, message: Message):
         args, kwargs, embeds = message.decode()
 
+        eta = maybe_iso8601(message.headers.get("eta", None))
+        expires = maybe_iso8601(message.headers.get("expires", None))
+
         return Request(
             app=app,
             id=message.headers.get("id", None),
             correlation_id=message.properties.get("correlation_id", None),
             args=args,
             kwargs=kwargs,
-            retries=message.headers.get("retries", 0),
-            eta=message.headers.get("eta", None),
-            expires=message.headers.get("expires", None),
+            retries=try_to_int(message.headers.get("retries", 0)),
+            eta=eta,
+            expires=expires,
             group=message.headers.get("group", None),
             origin=message.headers.get("origin", None),
             reply_to=message.properties.get("reply_to", None),

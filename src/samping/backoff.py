@@ -4,7 +4,7 @@ from functools import wraps
 from datetime import timedelta
 from abc import ABC, abstractmethod
 
-from .utils.format import utcnow
+from .utils.time import utcnow
 
 
 def retry(count: int = 5, on_exception=(Exception,)):

@@ -3,12 +3,10 @@ from datetime import datetime, timedelta
 from enum import Enum
 from collections.abc import Mapping
 import uuid
-import math
 import numbers
 
 from ..exceptions import Retry
-from ..utils.time import maybe_make_aware
-from ..utils.format import to_iso_format
+from ..utils.time import maybe_make_aware, get_exponential_backoff_interval
 from ..messages import Message, MessageBodyV1, MessageBodyV2, ProtocolVersion
 from .request import Request
 
@@ -137,8 +135,7 @@ class Task:
 
     def retry_delay(self, now=None):
         """Called when this task failed, return time the task should be retried"""
-        retries = self.request.retries
-        delay_secs = min(math.pow(2, retries), self.get_max_retry_delay())
+        delay_secs = get_exponential_backoff_interval(2, self.request.retries, self.get_max_retry_delay())
         return max(delay_secs, self.get_min_retry_delay())
 
     def get_min_retry_delay(self):
@@ -224,7 +221,7 @@ class Task:
             )
 
         if not isinstance(eta, str):
-            eta = eta and to_iso_format(eta)
+            eta = eta and eta.isoformat()
 
         root_id = options.get("root_id", None)
         if not root_id:
@@ -310,7 +307,7 @@ class Task:
             )
 
         if not isinstance(eta, str):
-            eta = eta and to_iso_format(eta)
+            eta = eta and eta.isoformat()
 
         body = MessageBodyV1(
             id=task_id,

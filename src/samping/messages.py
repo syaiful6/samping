@@ -5,7 +5,7 @@ from enum import Enum
 
 from .serialization import loads, dumps
 from .exceptions import DecodeError
-from .utils.format import to_iso_format, parse_iso8601
+from .utils.time import maybe_iso8601
 
 
 class ProtocolVersion(Enum):
@@ -16,12 +16,10 @@ class ProtocolVersion(Enum):
 @dataclass
 class Message:
     body: str
-    delivery_tag: typing.Optional[str] = None
     content_type: typing.Optional[str] = None
     content_encoding: typing.Optional[str] = None
     headers: typing.Optional[typing.Dict[str, str]] = None
     properties: typing.Optional[typing.Dict[str, str]] = None
-    delivery_info: typing.Optional[typing.Dict[str, str]] = None
     accept: typing.Optional[typing.List[str]] = None
 
     def decode(self):
@@ -55,9 +53,9 @@ class MessageBodyV1:
         eta = messages.get("eta", None)
         expires = messages.get("expires", None)
         if eta and isinstance(eta, str):
-            messages["eta"] = parse_iso8601(eta)
+            messages["eta"] = maybe_iso8601(eta)
         if expires and isinstance(expires, str):
-            messages["expires"] = parse_iso8601(expires)
+            messages["expires"] = maybe_iso8601(expires)
         return cls(**messages)
 
     def encode(self):
@@ -68,8 +66,8 @@ class MessageBodyV1:
                 "args": self.args,
                 "kwargs": self.kwargs,
                 "retries": self.retries,
-                "eta": to_iso_format(self.eta) if self.eta else None,
-                "expires": to_iso_format(self.expires) if self.expires else None,
+                "eta": self.eta.isoformat() if self.eta else None,
+                "expires": self.expires.isoformat() if self.expires else None,
             },
             "msgpack",
         )

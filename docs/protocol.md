@@ -5,10 +5,9 @@ The queue
 The scope contains
 
 - type (Unicode string) - `queue`
-- header - (Iterable): An iterable of \[name, value\] two-item iterables, where name is the header name and value is the header value.
-- properties - (Iterable) An iterable of \[name, value\] two-item iterables, where the name is the property name and value is the property value
-- content_type: The content type of the body
-- content_encoding: The content encoding of the body
+- name: (string): The source of this queue message originated from
+- headers - (Iterable): An iterable of \[name, value\] two-item iterables, where name is the header name and value is the header value.
+- properties - (Iterable): An iterable of \[name, value\] two-item iterables, where name is the header name and value is the header value.
 - broker - (string): The broker that send this queue to application
 - body - (string|byte): The body of the message
 

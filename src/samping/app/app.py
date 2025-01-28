@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from croniter import croniter
 from functools import cached_property
 import traceback
@@ -13,11 +13,10 @@ from ..tasks import Task, CronJob
 from ..messages import Message
 from ..exceptions import DecodeError, ContentDisallowed
 from ..routes import route, Rule
-from ..utils.format import utcnow, parse_iso8601
-from ..utils.time import timezone as utils_timezone, to_utc
+from ..utils.time import timezone as utils_timezone, to_utc, maybe_make_aware, maybe_iso8601, utcnow
 from ..types import Lifespan, AppType, Scope, Receive, Send
 from .conf import Conf
-from .tracer import build_tracer
+from .tracer import build_tracer, Tracer
 
 
 async def run_tab(logger, tab, name):
@@ -123,7 +122,7 @@ class App:
 
     async def beat(self, scope: Scope):
         try:
-            event_time = parse_iso8601(scope.get("time", ""))
+            event_time = maybe_iso8601(scope.get("time", ""))
             event_time = event_time.astimezone(tz=self.timezone)
         except ValueError:
             event_time = self.now()
@@ -132,19 +131,18 @@ class App:
 
     async def handle_v1_message(self, scope: Scope, receive: Receive, send: Send):
         headers = scope["headers"]
-        properties = scope.get("properties", {})
         message = Message(
             scope["body"],
             headers=headers,
-            properties=properties,
-            content_type=scope["content_type"],
-            content_encoding=scope["content_encoding"],
+            properties=scope.get("properties", {}),
+            content_type=headers.get("content_type", None),
+            content_encoding=headers.get("content_encoding", None),
         )
         try:
             task_message = message.decode()
         except (DecodeError, ContentDisallowed):
             self.logger.warning("Received invalid message, discarding")
-            return await send({"type": "queue.ack"})
+            return await send({"type": "queue.ack", "task": task_name})
         else:
             task_name = task_message["task"]
             if task_name not in self._tasks:
@@ -152,31 +150,17 @@ class App:
                     "Receive message for task %s, but it is not in registered task, discarding.",
                     task_name,
                 )
-                await send({"type": "queue.ack"})
+                await send({"type": "queue.ack", "task": task_name})
                 return
 
             task = self._tasks[task_name]
             tracer = build_tracer(self, task, message, scope.get("hostname", ""))
-            if tracer.is_delayed:
-                await tracer.wait()
+            
+            await self.trace_task_execution(scope, send, tracer)
 
-            if not tracer.acks_late:
-                await send({"type": "queue.ack"})
-
-            retry = await tracer.trace()
-            if retry:
-                if isinstance(retry, numbers.Real):
-                    await send({"type": "queue.nack", "delay": retry})
-                else:
-                    delay = (self.now() - retry).total_seconds()
-                    await send({"type": "queue.nack", "delay": delay})
-            else:
-                if tracer.acks_late:
-                    await send({"type": "queue.ack"})
 
     async def handle_v2_message(self, scope: Scope, receive: Receive, send: Send):
         headers = scope["headers"]
-        properties = scope.get("properties", {})
         task_name = headers.get("task", None)
 
         if task_name not in self._tasks:
@@ -184,39 +168,42 @@ class App:
                 "Receive message for task %s, but it is not in registered task, discarding.",
                 task_name,
             )
-            await send({"type": "queue.ack"})
+            await send({"type": "queue.ack", "task": task_name})
             return
 
         task = self._tasks[task_name]
         message = Message(
             scope["body"],
             headers=headers,
-            properties=properties,
-            content_type=scope["content_type"],
-            content_encoding=scope["content_encoding"],
+            properties=scope.get("properties", {}),
+            content_type=headers.get("content_type", None),
+            content_encoding=headers.get("content_encoding", None),
         )
         try:
             tracer = build_tracer(self, task, message, scope.get("hostname", ""))
         except (DecodeError, ContentDisallowed):
             self.logger.warning("Received invalid message, discarding")
-            return await send({"type": "queue.ack"})
+            return await send({"type": "queue.ack", "task": task_name})
+        
+        await self.trace_task_execution(scope, send, tracer)
 
+    async def trace_task_execution(self, scope: Scope, send: Send, tracer: Tracer):
         if tracer.is_delayed:
             await tracer.wait()
 
         if not tracer.acks_late:
-            await send({"type": "queue.ack"})
+            await send({"type": "queue.ack", "task": tracer.task.name})
 
-        retry = await tracer.trace()
-        if retry:
-            if isinstance(retry, numbers.Real):
-                await send({"type": "queue.nack", "delay": retry})
-            else:
-                delay = (self.now() - retry).total_seconds()
-                await send({"type": "queue.nack", "delay": delay})
+        eta = await tracer.trace()
+        if eta:
+            if isinstance(eta, numbers.Real):
+                now = self.now()
+                eta = maybe_make_aware(now + timedelta(seconds=eta), tz=self.timezone)
+
+            await self.driver.send_batch(scope["name"], [tracer.as_retry_message(eta)])
         else:
             if tracer.acks_late:
-                await send({"type": "queue.ack"})
+                await send({"type": "queue.ack", "task": tracer.task.name})
 
     async def lifespan(self, scope: Scope, receive: Receive, send: Send):
         started = False

@@ -123,6 +123,25 @@ class Tracer:
         if secs:
             await asyncio.sleep(secs)
 
+    def as_retry_message(self, eta=None):
+        return self.task.as_message_v2(
+            task_id=self.task.request.id,
+            name=self.task.name,
+            args=self.task.request.args,
+            kwargs=self.task.request.kwargs,
+            eta=eta or self.task.request.eta,
+            expires=self.task.request.expires,
+            retries=self.task.request.retries + 1,
+            callbacks=self.task.request.callbacks,
+            errbacks=self.task.request.errbacks,
+            chord=self.task.request.chord,
+            chain=self.task.request.chain,
+            group=self.task.request.group,
+            time_limit=self.task.request.time_limit,
+            origin=self.task.request.origin,
+            reply_to=self.task.request.reply_to,
+        )
+
 
 def build_tracer(app, task: Task, message: Message, hostname):
     request = Request.from_message(app, message)
