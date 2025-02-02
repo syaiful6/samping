@@ -8,18 +8,20 @@ from ..messages import Message
 
 class QueueDriver(Protocol):
     @abstractmethod
-    async def send_batch(
-        self, queue: str, messages: List[Message], **kwargs
-    ) -> None: ...
+    async def send_batch(self, queue: str, messages: List[Message], **kwargs) -> None:
+        ...
 
     @abstractmethod
-    async def consume(self, queues: str) -> AsyncGenerator[Message, None]: ...
+    async def consume(self, queues: str) -> AsyncGenerator[Message, None]:
+        ...
 
     @abstractmethod
-    async def send_ack(self, message: Message) -> None: ...
+    async def send_ack(self, message: Message) -> None:
+        ...
 
     @abstractmethod
-    async def send_nack(self, message: Message, delay: int = 1) -> None: ...
+    async def send_nack(self, message: Message, delay: int = 1) -> None:
+        ...
 
 
 class MockDriver(Protocol):
@@ -34,10 +36,10 @@ class MockDriver(Protocol):
             else:
                 messages = self.queues[queue]
                 messages.extend(queue)
-    
+
     async def send_concume(self, queues):
         raise NotImplemented("not implemented")
-    
+
     async def send_ack(self, message):
         pass
 
