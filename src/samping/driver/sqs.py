@@ -1,7 +1,7 @@
 import base64
 import aioboto3
-from dataclasses import dataclass
 from itertools import zip_longest, count
+from datetime import timedelta
 from typing import (
     Any,
     AsyncGenerator,
@@ -20,11 +20,69 @@ from ..messages import Message
 from . import QueueDriver
 from ..utils.iterators import countdown
 from ..utils.format import try_to_int
-from ..utils.time import get_exponential_backoff_interval, maybe_eta_delay_seconds
+from ..utils.time import (
+    get_exponential_backoff_interval,
+    maybe_eta_delay_seconds,
+    utcnow,
+)
 from ..utils.json import loads, dumps
 from ..utils.encoding import str_to_bytes
+from ..utils.btree import Btree
 
 T = TypeVar("T")
+
+message_counter = count()
+
+
+def less_message(a, b):
+    delivery_a = a.properties.get("delivery_info", {})
+    delivery_b = b.properties.get("delivery_info", {})
+
+    if delivery_a.get("delivered_at", None) == delivery_b.get("delivered_at", None):
+        return delivery_a.get("message_id", 0) < delivery_b.get("message_id", 0)
+
+    return delivery_a.get("delivered_at", None) < delivery_b.get("delivered_at", None)
+
+
+class Qos:
+    def __init__(self, prefetch_count=50, visibility_timeout: int = 300):
+        self.prefetch_count = prefetch_count
+        self._delivered = Btree(100, less=less_message)
+        self.visibility_timeout = visibility_timeout
+
+    def append(self, message):
+        self._delivered.set(message)
+
+    def ack(self, message):
+        self._delivered.remove(message)
+
+    def can_consume(self):
+        pcount = self.prefetch_count
+        return not pcount or len(self._delivered) < pcount
+
+    def __len__(self):
+        return len(self._delivered)
+
+    def can_consume_max_estimate(self):
+        pcount = self.prefetch_count
+        return max(pcount - len(self._delivered), 0)
+
+    def get_unacked_messages(self):
+        pivot = Message(
+            "",
+            properties={
+                "delivery_info": {
+                    "message_id": next(message_counter),
+                    "delivered_at": utcnow()
+                    - timedelta(seconds=self.visibility_timeout),
+                }
+            },
+        )
+        return list(self._delivered.descend(pivot))
+
+    def remove_unacked_messages(self):
+        for message in self.get_unacked_messages():
+            self._delivered.remove(message)
 
 
 def chunk(iterable: Iterable[T], n: int) -> Iterable[List[T]]:
@@ -65,7 +123,9 @@ class SQSDriver(QueueDriver):
         self.lock = asyncio.Lock()
         self._queues = {}
         self.logger = logging.getLogger("samping")
-        self._prefetch_size = prefetch_size
+        self.qos = Qos(
+            prefetch_count=prefetch_size, visibility_timeout=visibility_timeout
+        )
         self.batch_window = batch_window
 
     def sqs_client(self):
@@ -109,14 +169,12 @@ class SQSDriver(QueueDriver):
     async def _fetch_messages_on(self, queues: List[str]):
         async with self.sqs_client() as sqs:
             messages = []
-            for queue in queues:
-                sqs_queue = await self.get_queue(sqs, queue)
-                if messages:
-                    # if we already have message, break here
-                    break
+            i = 0
+            while i < len(queues):
+                sqs_queue = await self.get_queue(sqs, queues[i])
                 for max_num in countdown(
-                    max(self._prefetch_size, 10),
-                    min(self._prefetch_size, 10),
+                    self.qos.can_consume_max_estimate(),
+                    min(self.qos.can_consume_max_estimate(), 10),
                 ):
                     current_sqs_messages = await sqs_queue.receive_messages(
                         AttributeNames=["All"],
@@ -129,11 +187,16 @@ class SQSDriver(QueueDriver):
                         break
                     current_messages = await asyncio.gather(
                         *[
-                            self._message_to_python(message, queue)
+                            self._message_to_python(message, queues[i])
                             for message in current_sqs_messages
                         ]
                     )
                     messages.extend(current_messages)
+                # break if we already have message, otherwise try next queue
+                if not messages:
+                    i += 1
+                else:
+                    break
             return messages
 
     async def consume(self, queues: str) -> AsyncGenerator[Message, None]:
@@ -141,16 +204,31 @@ class SQSDriver(QueueDriver):
         retries = 0
         while True:
             next_wait = 0
-            messages = await self._fetch_messages_on(queue_names)
-            if messages:
-                retries = 0
-                self.logger.debug("sqs: got %d messages", len(messages))
-                for message in messages:
-                    yield message
+            if self.qos.can_consume():
+                messages = await self._fetch_messages_on(queue_names)
+                if messages:
+                    self.logger.debug("sqs: received %d messages", len(messages))
+                    retries = 0
+                    async with self.lock:
+                        for message in messages:
+                            self.qos.append(message)
+                            yield message
+                else:
+                    retries += 1
+                    next_wait = get_exponential_backoff_interval(2, retries, 120)
+                    self.logger.info(
+                        "sqs: received empty messages, in flight messages: %d",
+                        len(self.qos),
+                    )
             else:
                 retries += 1
                 next_wait = get_exponential_backoff_interval(2, retries, 120)
-                self.logger.info("sqs: got empty messages")
+                self.logger.info(
+                    "waiting application to process messages, in flight messages: %s",
+                    len(self.qos),
+                )
+                async with self.lock:
+                    self.qos.remove_unacked_messages()
 
             self.logger.debug(
                 f"sqs: sleeping for {next_wait} seconds before polling again"
@@ -165,8 +243,11 @@ class SQSDriver(QueueDriver):
         if queue and ack_id:
             async with self.sqs_client() as sqs:
                 sqs_queue = await self.get_queue(sqs, queue)
-                message = await sqs_queue.Message(ack_id)
-                await message.delete()
+                sqs_message = await sqs_queue.Message(ack_id)
+                await sqs_message.delete()
+
+            async with self.lock:
+                self.qos.ack(message)
         else:
             self.logger.debug(
                 "message have empty delivery_tag and delivery_info properties"
@@ -180,8 +261,11 @@ class SQSDriver(QueueDriver):
         if queue and ack_id:
             async with self.sqs_client() as sqs:
                 sqs_queue = await self.get_queue(sqs, queue)
-                message = await sqs_queue.Message(ack_id)
-                await message.change_visibility(VisibilityTimeout=delay)
+                sqs_message = await sqs_queue.Message(ack_id)
+                await sqs_message.change_visibility(VisibilityTimeout=delay)
+
+            async with self.lock:
+                self.qos.ack(message)
         else:
             self.logger.debug(
                 "message have empty routing_key and delivery_info properties"
@@ -196,6 +280,8 @@ class SQSDriver(QueueDriver):
             "approximate_receive_count": try_to_int(
                 attributes.get("ApproximateReceiveCount", 1), 1
             ),
+            "message_id": next(message_counter),
+            "delivered_at": utcnow(),
         }
         message_attributes = {
             "delivery_info": delivery_info,
