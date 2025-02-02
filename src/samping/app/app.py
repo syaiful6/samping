@@ -140,7 +140,7 @@ class App:
         message = Message(
             scope["body"],
             headers=headers,
-            properties=dict(scope.get("properties", {})),
+            properties=dict(scope.get("properties", {}) or {}),
             content_type=headers.get("content_type", None),
             content_encoding=headers.get("content_encoding", None),
         )
@@ -180,7 +180,7 @@ class App:
         message = Message(
             scope["body"],
             headers=headers,
-            properties=dict(scope.get("properties", {})),
+            properties=dict(scope.get("properties", {}) or {}),
             content_type=headers.get("content_type", None),
             content_encoding=headers.get("content_encoding", None),
         )

@@ -24,7 +24,7 @@ def driver():
     return SQSDriver(
         endpoint_url="http://localhost:9324",
         use_ssl=False,
-        prefetch_size=30,
+        prefetch_size=15,
         visibility_timeout=60,
     )
 
@@ -43,7 +43,7 @@ app.routes = [
 @app.task(name="test_task")
 async def test_task(data: str):
     logger.info("get test_task with data: %s", data)
-    await asyncio.sleep(10)
+    await asyncio.sleep(30)
 
 
 @app.task(name="buggy_task")
