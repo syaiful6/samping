@@ -1,6 +1,7 @@
 import base64
 import aioboto3
-from itertools import zip_longest
+from dataclasses import dataclass
+from itertools import zip_longest, count
 from typing import (
     Any,
     AsyncGenerator,
@@ -159,7 +160,8 @@ class SQSDriver(QueueDriver):
     async def send_ack(self, message: Message):
         ack_id = message.properties.get("delivery_tag", None)
         delivery_info = message.properties.get("delivery_info", {})
-        queue = delivery_info.get("queue", None)
+        queue = delivery_info.get("routing_key", None)
+
         if queue and ack_id:
             async with self.sqs_client() as sqs:
                 sqs_queue = await self.get_queue(sqs, queue)
@@ -173,7 +175,8 @@ class SQSDriver(QueueDriver):
     async def send_nack(self, message: Message, delay: int = 1):
         ack_id = message.properties.get("delivery_tag", None)
         delivery_info = message.properties.get("delivery_info", {})
-        queue = delivery_info.get("queue", None)
+        queue = delivery_info.get("routing_key", None)
+
         if queue and ack_id:
             async with self.sqs_client() as sqs:
                 sqs_queue = await self.get_queue(sqs, queue)
@@ -181,7 +184,7 @@ class SQSDriver(QueueDriver):
                 await message.change_visibility(VisibilityTimeout=delay)
         else:
             self.logger.debug(
-                "message have empty delivery_tag and delivery_info properties"
+                "message have empty routing_key and delivery_info properties"
             )
 
     async def _message_to_python(self, sqs_message, queue: str) -> Message:
@@ -189,7 +192,7 @@ class SQSDriver(QueueDriver):
         attributes = await sqs_message.attributes
 
         delivery_info = {
-            "queue": queue,
+            "routing_key": queue,  # set the queue as routing key
             "approximate_receive_count": try_to_int(
                 attributes.get("ApproximateReceiveCount", 1), 1
             ),

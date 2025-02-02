@@ -1,10 +1,23 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from samping.driver.sqs import SQSDriver
 from samping.app import App
 from samping.routes import Rule
-import asyncio
-import logging
 
 logger = logging.getLogger("example")
+
+
+shared_resource = {}
+
+@asynccontextmanager
+async def lifespan(app: App):
+    logging.getLogger("samping").info("establishing connection to database")
+    await asyncio.sleep(10)
+    shared_resource["connection"] = "db"
+    yield
+    shared_resource.clear()
 
 
 def driver():
@@ -19,6 +32,7 @@ def driver():
 app = App(
     driver_factory=driver,
     default_queue="samping",
+    lifespan=lifespan,
 )
 app.routes = [
     Rule("test_*", "samping"),

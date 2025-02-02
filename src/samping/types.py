@@ -13,3 +13,12 @@ StatefulLifespan = typing.Callable[
     [AppType], typing.AsyncContextManager[typing.Mapping[str, typing.Any]]
 ]
 Lifespan = typing.Union[StatelessLifespan[AppType], StatefulLifespan[AppType]]
+
+ASGI3Application = typing.Callable[
+    [
+        Scope,
+        Receive,
+        Send,
+    ],
+    typing.Awaitable[None],
+]

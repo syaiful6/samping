@@ -13,7 +13,13 @@ from ..tasks import Task, CronJob
 from ..messages import Message
 from ..exceptions import DecodeError, ContentDisallowed
 from ..routes import route, Rule
-from ..utils.time import timezone as utils_timezone, to_utc, maybe_make_aware, maybe_iso8601, utcnow
+from ..utils.time import (
+    timezone as utils_timezone,
+    to_utc,
+    maybe_make_aware,
+    maybe_iso8601,
+    utcnow,
+)
 from ..types import Lifespan, AppType, Scope, Receive, Send
 from .conf import Conf
 from .tracer import build_tracer, Tracer
@@ -72,7 +78,7 @@ class App:
         self._cron_tabs: Dict[str, CronJob] = {}
         self.default_queue = default_queue
         self.routes = routes or None
-        self.lifespan = lifespan if lifespan else _DefaultLifespan()
+        self.lifespan_context = lifespan if lifespan else _DefaultLifespan()
         self._conf = Conf(default_conf)
 
     def task_route(self, task: Task) -> str:
@@ -113,7 +119,7 @@ class App:
         if scope["type"] == "beat":
             return await self.beat(scope)
 
-        headers = scope["headers"]
+        headers = dict(scope["headers"])
         task_name = headers.get("task", None)
         if task_name:
             return await self.handle_v2_message(scope, receive, send)
@@ -130,11 +136,11 @@ class App:
         await self.run_matched_tabs(current_date=event_time)
 
     async def handle_v1_message(self, scope: Scope, receive: Receive, send: Send):
-        headers = scope["headers"]
+        headers = dict(scope["headers"])
         message = Message(
             scope["body"],
             headers=headers,
-            properties=scope.get("properties", {}),
+            properties=dict(scope.get("properties", {})),
             content_type=headers.get("content_type", None),
             content_encoding=headers.get("content_encoding", None),
         )
@@ -155,12 +161,11 @@ class App:
 
             task = self._tasks[task_name]
             tracer = build_tracer(self, task, message, scope.get("hostname", ""))
-            
+
             await self.trace_task_execution(scope, send, tracer)
 
-
     async def handle_v2_message(self, scope: Scope, receive: Receive, send: Send):
-        headers = scope["headers"]
+        headers = dict(scope["headers"])
         task_name = headers.get("task", None)
 
         if task_name not in self._tasks:
@@ -175,7 +180,7 @@ class App:
         message = Message(
             scope["body"],
             headers=headers,
-            properties=scope.get("properties", {}),
+            properties=dict(scope.get("properties", {})),
             content_type=headers.get("content_type", None),
             content_encoding=headers.get("content_encoding", None),
         )
@@ -184,7 +189,7 @@ class App:
         except (DecodeError, ContentDisallowed):
             self.logger.warning("Received invalid message, discarding")
             return await send({"type": "queue.ack", "task": task_name})
-        
+
         await self.trace_task_execution(scope, send, tracer)
 
     async def trace_task_execution(self, scope: Scope, send: Send, tracer: Tracer):
@@ -216,7 +221,7 @@ class App:
                             "The server/worker does not support state in the lifespan scope"
                         )
                     scope["state"].update(maybe_state)
-                await send({"type": "lifespan.startup.completed"})
+                await send({"type": "lifespan.startup.complete"})
                 started = True
                 await receive()
         except BaseException:
@@ -224,7 +229,7 @@ class App:
             if started:
                 await send({"type": "lifespan.shutdown.failed", "message": exc_text})
             else:
-                await send({"type": "lifespan.started.failed", "message": exc_text})
+                await send({"type": "lifespan.startup.failed", "message": exc_text})
         else:
             await send({"type": "lifespan.shutdown.complete"})
 

@@ -135,7 +135,9 @@ class Task:
 
     def retry_delay(self, now=None):
         """Called when this task failed, return time the task should be retried"""
-        delay_secs = get_exponential_backoff_interval(2, self.request.retries, self.get_max_retry_delay())
+        delay_secs = get_exponential_backoff_interval(
+            2, self.request.retries, self.get_max_retry_delay()
+        )
         return max(delay_secs, self.get_min_retry_delay())
 
     def get_min_retry_delay(self):
