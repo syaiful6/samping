@@ -6,10 +6,9 @@ import uuid
 import numbers
 
 from ..exceptions import Retry
-from ..utils.time import maybe_make_aware
-from ..utils.format import to_iso_format
+from ..utils.time import maybe_make_aware, get_exponential_backoff_interval
 from ..messages import Message, MessageBodyV1, MessageBodyV2, ProtocolVersion
-
+from .request import Request
 
 #: earliest date supported by time.mktime.
 INT_MIN = -2147483648
@@ -55,11 +54,28 @@ class class_property:
 class Task:
     _app = None
 
+    _request = None
+
     name = None
 
     max_retries = 3
 
     serializer = None
+
+    # the time limit of this task allowed in seconds
+    time_limit = 300
+
+    # When enabled message for this will be acknowledged **after**
+    # the task has been executed, and not *right before* (the default behaviour)
+    acks_late = None
+
+    # default strategy to calculate retry delay eta
+    # this variable set the minimum retry delay allowed
+    min_retry_delay = None
+
+    # default strategy to calculate delay eta
+    # this variable set the maximum retry delay allowed
+    max_retry_delay = None
 
     protocol_version = ProtocolVersion.V2
 
@@ -91,16 +107,58 @@ class Task:
 
     app = class_property(_get_app, bind)
 
+    @property
+    def request(self) -> Request | None:
+        return self._request
+
+    def from_request(self, request: Request) -> "Task":
+        cls = self.__class__
+        task = cls()
+        task._request = request
+
+        return task
+
     async def run(self, *args, **kwargs):
         raise NotImplementedError("Tasks must define the run method.")
+
+    async def on_success(self, result=None):
+        pass
+
+    async def on_failure(self, exc, task_id, args, kwargs):
+        pass
+
+    def retry_for_error(self, exc) -> bool:
+        """Called when an error raised during execution of task. Return
+        True if we wish to retry
+        """
+        return True
+
+    def retry_delay(self, now=None):
+        """Called when this task failed, return time the task should be retried"""
+        delay_secs = get_exponential_backoff_interval(2, self.request.retries, self.get_max_retry_delay())
+        return max(delay_secs, self.get_min_retry_delay())
+
+    def get_min_retry_delay(self):
+        if self.min_retry_delay:
+            return self.min_retry_delay
+
+        return 0
+
+    def get_max_retry_delay(self):
+        if self.max_retry_delay:
+            return self.max_retry_delay
+
+        return 3600
 
     def to_message(
         self,
         args=None,
         kwargs=None,
         task_id=None,
+        countdown=None,
         eta=None,
         expires=None,
+        retries=None,
         timezone=None,
         **options,
     ) -> Message:
@@ -117,11 +175,12 @@ class Task:
             task_id=task_id,
             name=self.name,
             args=args,
+            countdown=countdown,
             kwargs=kwargs,
             eta=eta,
             expires=expires,
             timezone=timezone,
-            retries=self.max_retries,
+            retries=retries or 0,
             **options,
         )
 
@@ -131,6 +190,7 @@ class Task:
         name,
         args=None,
         kwargs=None,
+        countdown=None,
         eta=None,
         expires=None,
         timezone=None,
@@ -147,6 +207,12 @@ class Task:
         if task_id is None:
             task_id = str(uuid.uuid4())
 
+        if countdown:
+            self._verify_seconds(countdown, "countdown")
+            now = self.app.now()
+            timezone = timezone or self.app.timezone
+            eta = maybe_make_aware(now + timedelta(seconds=countdown), tz=timezone)
+
         if isinstance(expires, numbers.Real):
             self._verify_seconds(expires, "expires")
             timezone = timezone or self.app.timezone
@@ -155,7 +221,7 @@ class Task:
             )
 
         if not isinstance(eta, str):
-            eta = eta and to_iso_format(eta)
+            eta = eta and eta.isoformat()
 
         root_id = options.get("root_id", None)
         if not root_id:
@@ -172,9 +238,10 @@ class Task:
             "group": options.get("group", None),
             "group_id": options.get("group_id", None),
             "retries": options.get("retries", 3),
+            "timelimit": [options.get("time_limit", self.time_limit), None],
             "root_id": root_id,
             "parent_id": options.get("parent_id", None),
-            "origin": "",
+            "origin": options.get("origin_id", None),
             "ignore_result": options.get("ignore_result", False),
             "replaced_task_nesting": options.get("replaced_task_nesting", 0),
         }
@@ -209,6 +276,7 @@ class Task:
         name,
         args=None,
         kwargs=None,
+        countdown=None,
         eta=None,
         expires=None,
         timezone=None,
@@ -225,6 +293,12 @@ class Task:
         if task_id is None:
             task_id = str(uuid.uuid4())
 
+        if countdown:
+            self._verify_seconds(countdown, "countdown")
+            now = self.app.now()
+            timezone = timezone or self.app.timezone
+            eta = maybe_make_aware(now + timedelta(seconds=countdown), tz=timezone)
+
         if isinstance(expires, numbers.Real):
             self._verify_seconds(expires, "expires")
             timezone = timezone or self.app.timezone
@@ -233,16 +307,17 @@ class Task:
             )
 
         if not isinstance(eta, str):
-            eta = eta and to_iso_format(eta)
+            eta = eta and eta.isoformat()
 
         body = MessageBodyV1(
             id=task_id,
             task=self.name,
             args=args,
             kwargs=kwargs,
-            retries=self.max_retries,
+            retries=options.get("retries", 0),
             eta=eta,
             expires=expires,
+            timelimit=options.get("time_limit", self.time_limit),
         )
         content_type, content_encoding, data = body.encode()
 
@@ -265,6 +340,7 @@ class Task:
         kwargs=None,
         task_id: str = None,
         queue=None,
+        countdown=None,
         eta=None,
         expires=None,
         **opts,
@@ -275,9 +351,9 @@ class Task:
                 args=args,
                 kwargs=kwargs,
                 task_id=task_id,
-                queue=queue,
                 eta=eta,
                 expires=expires,
+                countdown=countdown,
                 **opts,
             ),
             queue=queue,

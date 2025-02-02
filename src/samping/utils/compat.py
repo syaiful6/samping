@@ -2,7 +2,6 @@ from datetime import datetime, date
 import uuid
 import decimal
 import msgpack
-from .format import parse_iso8601, to_iso_format
 
 
 def encode_non_standard_msgpack(obj):

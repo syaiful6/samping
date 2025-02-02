@@ -1,21 +1,22 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from croniter import croniter
 from functools import cached_property
-import signal
+import traceback
 import uuid
+import numbers
 from typing import Optional, List, Callable, Union, Dict
 
 from ..driver import QueueDriver
-from ..exceptions import Retry
-from ..tasks import Task, CronJob, TaskStatus
+from ..tasks import Task, CronJob
 from ..messages import Message
+from ..exceptions import DecodeError, ContentDisallowed
 from ..routes import route, Rule
-from ..channel import channel, Sender
-from ..utils.format import utcnow
-from ..utils.time import timezone as utils_timezone, to_utc
+from ..utils.time import timezone as utils_timezone, to_utc, maybe_make_aware, maybe_iso8601, utcnow
+from ..types import Lifespan, AppType, Scope, Receive, Send
 from .conf import Conf
+from .tracer import build_tracer, Tracer
 
 
 async def run_tab(logger, tab, name):
@@ -45,30 +46,33 @@ default_conf = {
 }
 
 
+class _DefaultLifespan:
+    async def __aenter__(self):
+        pass
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        pass
+
+    def __call__(self, app) -> None:
+        return self
+
+
 class App:
     def __init__(
         self,
         driver_factory: Callable[[], QueueDriver],
-        task_timeout: int = 300,
-        queue_size: int = 0,
         default_queue: str = "default",
         routes: Optional[List[Rule]] = None,
-        disable_cron: bool = False,
+        lifespan: Lifespan[AppType] | None = None,
     ):
-        self._task_timeout = task_timeout
-        self._queue_size = queue_size
         self.driver_factory = driver_factory
         self._driver: Union[None, QueueDriver] = None
         self.logger = logging.getLogger("samping")
         self._tasks: Dict[str, Task] = {}
         self._cron_tabs: Dict[str, CronJob] = {}
-        self._loop = None
-        self._queue = None
         self.default_queue = default_queue
         self.routes = routes or None
-        self.disable_cron = disable_cron
-        self._num_worker = 0
-        self._stopping = asyncio.Event()
+        self.lifespan = lifespan if lifespan else _DefaultLifespan()
         self._conf = Conf(default_conf)
 
     def task_route(self, task: Task) -> str:
@@ -85,19 +89,9 @@ class App:
 
         return self._driver
 
-    @property
-    def active_workers(self):
-        return len(self.worker_dict)
-
     def now(self):
         now_in_utc = to_utc(utcnow())
         return now_in_utc.astimezone(self.timezone)
-
-    @property
-    def loop(self):
-        if self._loop is None:
-            self._loop = asyncio.get_event_loop()
-        return self._loop
 
     def tab(self, **opts):
         def create_job_cls(fun):
@@ -111,15 +105,136 @@ class App:
 
         return create_task_cls
 
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        assert scope["type"] in ("lifespan", "beat", "queue")
+
+        if scope["type"] == "lifespan":
+            return await self.lifespan(scope, receive, send)
+        if scope["type"] == "beat":
+            return await self.beat(scope)
+
+        headers = scope["headers"]
+        task_name = headers.get("task", None)
+        if task_name:
+            return await self.handle_v2_message(scope, receive, send)
+        else:
+            return await self.handle_v1_message(scope, receive, send)
+
+    async def beat(self, scope: Scope):
+        try:
+            event_time = maybe_iso8601(scope.get("time", ""))
+            event_time = event_time.astimezone(tz=self.timezone)
+        except ValueError:
+            event_time = self.now()
+
+        await self.run_matched_tabs(current_date=event_time)
+
+    async def handle_v1_message(self, scope: Scope, receive: Receive, send: Send):
+        headers = scope["headers"]
+        message = Message(
+            scope["body"],
+            headers=headers,
+            properties=scope.get("properties", {}),
+            content_type=headers.get("content_type", None),
+            content_encoding=headers.get("content_encoding", None),
+        )
+        try:
+            task_message = message.decode()
+        except (DecodeError, ContentDisallowed):
+            self.logger.warning("Received invalid message, discarding")
+            return await send({"type": "queue.ack", "task": task_name})
+        else:
+            task_name = task_message["task"]
+            if task_name not in self._tasks:
+                self.logger.warning(
+                    "Receive message for task %s, but it is not in registered task, discarding.",
+                    task_name,
+                )
+                await send({"type": "queue.ack", "task": task_name})
+                return
+
+            task = self._tasks[task_name]
+            tracer = build_tracer(self, task, message, scope.get("hostname", ""))
+            
+            await self.trace_task_execution(scope, send, tracer)
+
+
+    async def handle_v2_message(self, scope: Scope, receive: Receive, send: Send):
+        headers = scope["headers"]
+        task_name = headers.get("task", None)
+
+        if task_name not in self._tasks:
+            self.logger.warning(
+                "Receive message for task %s, but it is not in registered task, discarding.",
+                task_name,
+            )
+            await send({"type": "queue.ack", "task": task_name})
+            return
+
+        task = self._tasks[task_name]
+        message = Message(
+            scope["body"],
+            headers=headers,
+            properties=scope.get("properties", {}),
+            content_type=headers.get("content_type", None),
+            content_encoding=headers.get("content_encoding", None),
+        )
+        try:
+            tracer = build_tracer(self, task, message, scope.get("hostname", ""))
+        except (DecodeError, ContentDisallowed):
+            self.logger.warning("Received invalid message, discarding")
+            return await send({"type": "queue.ack", "task": task_name})
+        
+        await self.trace_task_execution(scope, send, tracer)
+
+    async def trace_task_execution(self, scope: Scope, send: Send, tracer: Tracer):
+        if tracer.is_delayed:
+            await tracer.wait()
+
+        if not tracer.acks_late:
+            await send({"type": "queue.ack", "task": tracer.task.name})
+
+        eta = await tracer.trace()
+        if eta:
+            if isinstance(eta, numbers.Real):
+                now = self.now()
+                eta = maybe_make_aware(now + timedelta(seconds=eta), tz=self.timezone)
+
+            await self.driver.send_batch(scope["name"], [tracer.as_retry_message(eta)])
+        else:
+            if tracer.acks_late:
+                await send({"type": "queue.ack", "task": tracer.task.name})
+
+    async def lifespan(self, scope: Scope, receive: Receive, send: Send):
+        started = False
+        await receive()
+        try:
+            async with self.lifespan_context(self) as maybe_state:
+                if maybe_state is not None:
+                    if "state" not in scope:
+                        raise RuntimeError(
+                            "The server/worker does not support state in the lifespan scope"
+                        )
+                    scope["state"].update(maybe_state)
+                await send({"type": "lifespan.startup.completed"})
+                started = True
+                await receive()
+        except BaseException:
+            exc_text = traceback.format_exc()
+            if started:
+                await send({"type": "lifespan.shutdown.failed", "message": exc_text})
+            else:
+                await send({"type": "lifespan.started.failed", "message": exc_text})
+        else:
+            await send({"type": "lifespan.shutdown.complete"})
+
     async def run_matched_tabs(self, current_date: Optional[datetime] = None):
-        n = utcnow() if current_date is None else current_date
+        n = self.now() if current_date is None else current_date
         tasks = []
         for name, tab in self._cron_tabs.items():
             if croniter.match(tab.expression, n):
                 task = asyncio.create_task(
-                    asyncio.wait_for(
-                        run_tab(self.logger, tab, name), timeout=self._task_timeout
-                    ),
+                    run_tab(self.logger, tab, name),
                     name=name + "-" + str(uuid.uuid4()),
                 )
                 tasks.append(task)
@@ -135,162 +250,6 @@ class App:
                         )
             except Exception as e:
                 self.logger.error(f"cron jobs exited with error: {e}")
-
-    async def _signal_handler(self, signame):
-        self.logger.info("receive signal %s! exiting", signame)
-        self._stopping.set()
-
-    async def run_worker(self, queues: str, num_worker: int = 3):
-        self.logger.info("starting %d workers processing queue %s", num_worker, queues)
-        for signame in ("SIGINT", "SIGTERM"):
-            self.loop.add_signal_handler(
-                getattr(signal, signame),
-                lambda: asyncio.create_task(self._signal_handler(signame)),
-            )
-
-        msg_tx, msg_rx = channel(self._queue_size)
-
-        producer = asyncio.create_task(self._run_producer(msg_tx, queues))
-
-        cron_task = None
-        if not self.disable_cron:
-            cron_task = asyncio.create_task(self._run_cron())
-
-        workers = set()
-        semaphore = asyncio.Semaphore(num_worker)
-
-        ev_tx, ev_rx = channel()
-
-        pending_tasks = 0
-
-        while True:
-            selected = await select(
-                ("message", msg_rx.recv()),
-                ("ending", self._stopping.wait()),
-                ("task_event", ev_rx.recv()),
-            )
-
-            for task in selected:
-                which, result = task.result()
-                if which == "message":
-                    self.logger.debug(
-                        "handle a task, current pending task: %d", pending_tasks
-                    )
-                    task = asyncio.create_task(
-                        self.execute_task(semaphore, ev_tx, result)
-                    )
-                    workers.add(task)
-                    task.add_done_callback(workers.discard)
-                elif which == "ending":
-                    self.logger.info("Warm shutdown")
-                    break
-                elif which == "task_event":
-                    self.logger.debug("task event received: %s", result)
-                    if result == TaskStatus.PENDING:
-                        pending_tasks += 1
-                    elif result == TaskStatus.FINISHED:
-                        pending_tasks -= 1
-            else:
-                if producer.done():
-                    self.logger.info("queue producer exited, starting producer")
-                    producer = asyncio.create_task(self._run_producer(queues))
-
-                if cron_task and cron_task.done():
-                    self.logger.info("cron worker exited, starting new process")
-                    cron_task = asyncio.create_task(self._run_cron())
-
-                continue
-
-            break
-
-        if pending_tasks > 0:
-            while pending_tasks > 0:
-                selected = await select(
-                    ("ending", self._stopping.wait()), ("task_event", ev_rx.recv())
-                )
-                for task in selected:
-                    which, result = task.result()
-                    if which == "ending":
-                        self.logger.info("Okay fine, shutting down now. See ya!")
-                        break
-                    elif which == "task_event":
-                        if result == TaskStatus.PENDING:
-                            pending_tasks += 1
-                        elif result == TaskStatus.FINISHED:
-                            pending_tasks -= 1
-                else:
-                    continue
-
-                break
-
-    async def _run_cron(self):
-        while True:
-            await self.run_matched_tabs()
-            await asyncio.sleep(60)
-
-    async def _run_producer(self, tx: Sender[Message], queues: str):
-        try:
-            async for message in self.driver.consume(queues):
-                self.logger.debug("got a new task message, put it in internal queue")
-                await tx.send(message)
-        except Exception:
-            self.logger.warning("producer exited...", exc_info=True)
-
-    async def execute_task(
-        self, sem: asyncio.Semaphore, tx: Sender[TaskStatus], message
-    ):
-        async with sem:
-            await tx.send(TaskStatus.PENDING)
-            try:
-                await self.handle_message(message, managed=True)
-            finally:
-                await tx.send(TaskStatus.FINISHED)
-
-    async def handle_messages(self, messages: List[Message], managed: bool = True):
-        await asyncio.gather(
-            *[self.handle_message(message, managed=managed) for message in messages]
-        )
-
-    async def handle_message(self, message: Message, managed: bool = True):
-        task_message = message.decode_task_message()
-        queue_name = message.queue or self.default_queue
-        if task_message.expires is not None and task_message.expires < utcnow():
-            self.logger.debug("task %s expired, deleting..", task.name)
-            await self.driver.send_ack(message.ack_id, queue_name)
-            return
-        if task_message.task not in self._tasks:
-            self.logger.debug(
-                "task %s not available in registered tasks, deleting.", task.name
-            )
-            await self.driver.send_ack(message.ack_id, queue_name)
-            return
-        task = self._tasks[task_message.task]
-        try:
-            self.logger.debug("handle message %s", task.name)
-            await asyncio.wait_for(
-                task.run(*task_message.args, **task_message.kwargs),
-                timeout=self._task_timeout,
-            )
-            await self.driver.send_ack(message.ack_id, queue_name)
-        except Retry as exc:
-            if managed:
-                if task_message.retries < message.receive_count:
-                    await self.driver.send_ack(message.ack_id, queue_name)
-                else:
-                    await self.driver.send_nack(
-                        message.ack_id, queue_name, delay=exc.when or 1
-                    )
-            else:
-                raise exc
-        except Exception as exc:
-            self.logger.exception("handle task %s returned an error", task_message.task)
-            if managed:
-                if task_message.retries < message.receive_count:
-                    await self.driver.send_ack(message.ack_id, queue_name)
-                else:
-                    await self.driver.send_nack(message.ack_id, queue_name)
-            else:
-                raise exc
 
     async def _send_message(
         self, message: Message, queue: Optional[str] = None, **kwargs

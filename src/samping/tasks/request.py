@@ -2,6 +2,8 @@ import typing
 from datetime import datetime
 from dataclasses import dataclass
 from ..messages import Message, MessageBodyV1
+from ..utils.format import try_to_int
+from ..utils.time import maybe_iso8601
 
 
 @dataclass
@@ -26,9 +28,6 @@ class Request:
 
     # the unique id of the task's group, if this task is a member.
     group: typing.Optional[str] = None
-
-    # The unique ID of the chord this task belongs to
-    chord: typing.Optional[str] = None
 
     # Name of the host that sent this task
     origin: typing.Optional[str] = None
@@ -70,15 +69,18 @@ class Request:
     def from_message_v2(cls, app, message: Message):
         args, kwargs, embeds = message.decode()
 
+        eta = maybe_iso8601(message.headers.get("eta", None))
+        expires = maybe_iso8601(message.headers.get("expires", None))
+
         return Request(
             app=app,
             id=message.headers.get("id", None),
             correlation_id=message.properties.get("correlation_id", None),
             args=args,
             kwargs=kwargs,
-            retries=message.headers.get("retries", 0),
-            eta=message.headers.get("eta", None),
-            expires=message.headers.get("expires", None),
+            retries=try_to_int(message.headers.get("retries", 0)),
+            eta=eta,
+            expires=expires,
             group=message.headers.get("group", None),
             origin=message.headers.get("origin", None),
             reply_to=message.properties.get("reply_to", None),
@@ -110,9 +112,32 @@ class Request:
             errbacks=task_message.errbacks,
         )
 
+    @property
+    def is_delayed(self):
+        """Check if the request has a future ETA"""
+        return self.eta is not None
+
+    def countdown(self, now=None):
+        """Get the TTL in seconds if the task has a future ETA."""
+        if not self.eta:
+            return None
+        now = now or self.app.now
+        countdown = (self.eta - now()).total_seconds()
+        return None if countdown < 0 else countdown
+
+    def is_expired(self, now=None):
+        """Check if the request is expired"""
+        if self.expires is None:
+            return False
+        now = now or self.app.now
+        return (now() - self.expires).total_seconds() >= 0
+
 
 def get_time_limit(time_limit):
     if not time_limit:
+        return time_limit
+
+    if isinstance(time_limit, (int, float)):
         return time_limit
 
     soft_limit, hard_limit = time_limit
