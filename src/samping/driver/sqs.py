@@ -147,6 +147,7 @@ class SQSDriver(QueueDriver):
                 for message in messages:
                     yield message
             else:
+                retries += 1
                 next_wait = get_exponential_backoff_interval(2, retries, 120)
                 self.logger.info("sqs: got empty messages")
 

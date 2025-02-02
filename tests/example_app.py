@@ -1,19 +1,14 @@
 import asyncio
 import logging
 
-from samping.driver.sqs import SQSDriver
+from samping.driver import MockDriver
 from samping import App, Rule, ProtocolVersion
 
 logger = logging.getLogger("example")
 
 
 def driver():
-    return SQSDriver(
-        endpoint_url="http://localhost:9324",
-        use_ssl=False,
-        prefetch_size=30,
-        visibility_timeout=60,
-    )
+    return MockDriver()
 
 
 app = App(
