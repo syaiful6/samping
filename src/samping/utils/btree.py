@@ -7,17 +7,17 @@ T = typing.TypeVar("T")
 
 @dataclass
 class Node(typing.Generic[T]):
-    count : int = 0
-    items : typing.Optional[typing.List[T]] = None
-    children : typing.Optional['Node[T]'] = None
+    count: int = 0
+    items: typing.Optional[typing.List[T]] = None
+    children: typing.Optional["Node[T]"] = None
 
     @property
     def leaf(self):
         return self.children is None
-    
+
     def __len__(self):
         return self.count
-    
+
     def _update_count(self):
         self.count = len(self.items) if self.items else 0
         if not self.leaf:
@@ -33,7 +33,11 @@ class Node(typing.Generic[T]):
         return children
 
     def copy(self):
-        return Node(count=self.count, items=self.items[:] if self.items else None, children=self.copy_children())
+        return Node(
+            count=self.count,
+            items=self.items[:] if self.items else None,
+            children=self.copy_children(),
+        )
 
 
 PathHint = namedtuple("PathHint", ("used", "path"))
@@ -44,7 +48,9 @@ def default_less(a, b):
 
 
 class Btree(typing.Generic[T]):
-    def __init__(self, degree, less : typing.Callable[[T, T], bool] =default_less, empty=None):
+    def __init__(
+        self, degree, less: typing.Callable[[T, T], bool] = default_less, empty=None
+    ):
         self.min, self.max = degree_to_min_max(degree)
         self.less = less
         self.empty = empty
@@ -56,7 +62,7 @@ class Btree(typing.Generic[T]):
         if not leaf:
             node.children = []
         return node
-    
+
     def _binary_search(self, node: Node[T], key: T):
         low, high = 0, len(node.items)
         while low < high:
@@ -65,11 +71,11 @@ class Btree(typing.Generic[T]):
                 low = h + 1
             else:
                 high = h
-        if low > 0 and not self.less(node.items[low-1], key):
+        if low > 0 and not self.less(node.items[low - 1], key):
             return low - 1, True
-        
+
         return low, False
-    
+
     def set(self, item: T):
         if self.root is None:
             self.root = self._new_node(True)
@@ -77,7 +83,7 @@ class Btree(typing.Generic[T]):
             self.root.count = 1
             self.count = 1
             return self.empty, False
-        
+
         prev, replaced, split = self._node_set(self.root, item)
         if split:
             left = self.root.copy()
@@ -102,7 +108,7 @@ class Btree(typing.Generic[T]):
             if len(node.items) == self.max:
                 return self.empty, False, True
             node.items.append(self.empty)
-            copy_at(i+1, node.items, node.items[i:])
+            copy_at(i + 1, node.items, node.items[i:])
             node.items[i] = item
             node.count += 1
             return self.empty, False, False
@@ -112,37 +118,37 @@ class Btree(typing.Generic[T]):
                 return self.empty, False, True
             right, median = self._node_split(node.children[i])
             node.children.append(None)
-            copy_at(i+1, node.children, node.children[i:])
-            node.children[i+1] = right
+            copy_at(i + 1, node.children, node.children[i:])
+            node.children[i + 1] = right
             node.items.append(self.empty)
-            copy_at(i+1, node.items, node.items[i:])
+            copy_at(i + 1, node.items, node.items[i:])
             node.items[i] = median
             return self._node_set(node, item)
         if not replaced:
             node.count += 1
 
         return prev, replaced, False
-    
+
     def _node_split(self, node: Node[T]):
         i = self.max // 2
         median = node.items[i]
 
         # right node
         right = self._new_node(node.leaf)
-        right.items = node.items[i+1:]
+        right.items = node.items[i + 1 :]
         if not node.leaf:
-            right.children = node.children[i+1:]
+            right.children = node.children[i + 1 :]
         right._update_count()
 
         # left node
         node.items[i] = self.empty
         node.items = node.items[:i]
         if not node.leaf:
-            node.children = node.children[:i+1]
+            node.children = node.children[: i + 1]
         node._update_count()
 
         return right, median
-    
+
     def scan(self):
         yield from self._scan_node(self.root)
 
@@ -150,14 +156,14 @@ class Btree(typing.Generic[T]):
         if node.leaf:
             yield from node.items
             return
-        
+
         for i, item in enumerate(node.items):
             yield from self._scan_node(node.children[i])
 
             yield item
 
-        yield from self._scan_node(node.children[len(node.children)-1])
-    
+        yield from self._scan_node(node.children[len(node.children) - 1])
+
     def get(self, key: T):
         node = self.root
         while True:
@@ -166,16 +172,16 @@ class Btree(typing.Generic[T]):
                 return node.items[i], True
             if not node.children:
                 return self.empty, False
-            
+
             node = node.children[i]
 
     def __len__(self):
         return self.count
-    
+
     def remove(self, key: T):
         if not self.root:
             return self.empty, False
-        
+
         prev, deleted = self._remove(self.root, False, key)
         if not deleted:
             return self.empty, False
@@ -191,18 +197,18 @@ class Btree(typing.Generic[T]):
         i = 0
         found = False
         if max:
-            i, found = len(node.items)-1, True
+            i, found = len(node.items) - 1, True
         else:
             i, found = self._binary_search(node, key)
         if node.leaf:
             if found:
                 # found the items at the leaf, remove it
                 prev = node.items[i]
-                node.items = node.items[:i] + node.items[i+1:]
+                node.items = node.items[:i] + node.items[i + 1 :]
                 node.count -= 1
                 return prev, True
             return self.empty, False
-        
+
         if found:
             if max:
                 i += 1
@@ -224,11 +230,11 @@ class Btree(typing.Generic[T]):
     def _node_rebalance(self, node: Node[T], i: int):
         if i == len(node.items):
             i -= 1
-        
-        left: Node[T] = node.children[i]
-        right: Node[T] = node.children[i+1]
 
-        if len(left.items)+len(right.items) < self.max:
+        left: Node[T] = node.children[i]
+        right: Node[T] = node.children[i + 1]
+
+        if len(left.items) + len(right.items) < self.max:
             # Merges the left and right children nodes together as a single node
             # that includes (left,item,right), and places the contents into the
             # existing left node. Delete the right node altogether and move the
@@ -241,51 +247,51 @@ class Btree(typing.Generic[T]):
             left.count += right.count + 1
 
             # move the item over one slot
-            copy_at(i, node.items, node.items[i+1:])
-            node.items[len(node.items)-1] = self.empty
-            node.items = node.items[:len(node.items)-1]
+            copy_at(i, node.items, node.items[i + 1 :])
+            node.items[len(node.items) - 1] = self.empty
+            node.items = node.items[: len(node.items) - 1]
 
             # move the children over one slot
-            copy_at(i+1, node.children, node.children[i+2:])
-            node.children[len(node.children)-1] = None
-            node.children = node.children[:len(node.children)-1]
+            copy_at(i + 1, node.children, node.children[i + 2 :])
+            node.children[len(node.children) - 1] = None
+            node.children = node.children[: len(node.children) - 1]
         elif len(left.items) > len(right.items):
             # move left -> right over one slot
             right.items.append(self.empty)
             copy_at(1, right.items, right.items[:])
             right.items[0] = node.items[i]
             right.count += 1
-            node.items[i] = left.items[len(left.items)-1]
-            left.items[len(left.items)-1] = self.empty
-            left.items = left.items[:len(left.items)-1]
+            node.items[i] = left.items[len(left.items) - 1]
+            left.items[len(left.items) - 1] = self.empty
+            left.items = left.items[: len(left.items) - 1]
             left.count -= 1
 
             if not left.leaf:
                 right.children.append(None)
                 copy_at(1, right.children, right.children[:])
-                right.children[0] = left.children[len(left.children)-1]
-                left.children[len(left.children)-1] = None
-                left.children = left.children[:len(left.children)-1]
+                right.children[0] = left.children[len(left.children) - 1]
+                left.children[len(left.children) - 1] = None
+                left.children = left.children[: len(left.children) - 1]
                 left.count -= right.children[0].count
                 right.count += right.children[0].count
         else:
             # move left <- right over one slot
-		    # Same as above but the other direction
+            # Same as above but the other direction
             left.items.append(node.items[i])
             left.count += 1
             node.items[i] = right.items[0]
             copy_at(0, right.items, right.items[1:])
-            right.items[len(right.items)-1] = self.empty
-            right.items = right.items[:len(right.items)-1]
+            right.items[len(right.items) - 1] = self.empty
+            right.items = right.items[: len(right.items) - 1]
             right.count -= 1
 
             if not left.leaf:
                 left.children.append(right.children[0])
                 copy_at(0, right.children, right.children[1:])
-                right.children[len(right.childrenn)-1] = None
-                right.children = right.children[:len(right.children)-1]
-                left.count += left.children[len(left.children)-1].count
-                right.count -= left.children[len(left.children)-1].count
+                right.children[len(right.childrenn) - 1] = None
+                right.children = right.children[: len(right.children) - 1]
+                left.count += left.children[len(left.children) - 1].count
+                right.count -= left.children[len(left.children) - 1].count
 
     def ascend(self, pivot: T):
         yield from self._ascend_node(self.root, pivot)
@@ -303,15 +309,15 @@ class Btree(typing.Generic[T]):
         while i < len(node.items):
             yield node.items[i]
             if not node.leaf:
-                yield from self._scan_node(node.children[i+1])
+                yield from self._scan_node(node.children[i + 1])
             i += 1
 
     def _node_reverse(self, node: Node[T]):
         if node.leaf:
             yield from reversed(node.items)
             return
-        
-        yield from self._node_reverse(node.children[len(node.children)-1])
+
+        yield from self._node_reverse(node.children[len(node.children) - 1])
 
         i = len(node.items)
         while i >= 0:
@@ -321,7 +327,7 @@ class Btree(typing.Generic[T]):
 
     def descend(self, pivot: T):
         yield from self._descend_node(self.root, pivot)
-    
+
     def _descend_node(self, node: Node[T], pivot: T):
         i, found = self._binary_search(node, pivot)
         if not found:
@@ -335,12 +341,14 @@ class Btree(typing.Generic[T]):
                 yield from self._node_reverse(node.children[i])
             i -= 1
 
+
 def copy_at(index, dest, source):
     max_copy = min(len(source), len(dest) - index)
     ix = 0
     while ix < max_copy:
-        dest[index+ix] = source[ix]
+        dest[index + ix] = source[ix]
         ix += 1
+
 
 def degree_to_min_max(deg: int):
     if deg <= 0:
