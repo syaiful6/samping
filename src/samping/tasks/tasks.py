@@ -313,7 +313,7 @@ class Task:
 
         body = MessageBodyV1(
             id=task_id,
-            task=self.name,
+            task=name,
             args=args,
             kwargs=kwargs,
             retries=options.get("retries", 0),
