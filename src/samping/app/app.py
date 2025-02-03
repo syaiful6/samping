@@ -160,6 +160,7 @@ class App:
                 return
 
             task = self._tasks[task_name]
+
             tracer = build_tracer(self, task, message, scope.get("hostname", ""))
 
             await self.trace_task_execution(scope, send, tracer)

@@ -37,7 +37,9 @@ def test_encode_task_messagev1_with_eta():
     )
     content_type, content_encoding, body = task_message.encode()
     assert isinstance(body, bytes)
-    message = Message(body=body, content_type=content_type, content_encoding=content_encoding)
+    message = Message(
+        body=body, content_type=content_type, content_encoding=content_encoding
+    )
     task_message_2 = MessageBodyV1.from_dict(message.decode())
 
     assert isinstance(task_message_2.eta, datetime.datetime)

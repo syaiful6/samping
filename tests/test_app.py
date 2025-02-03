@@ -5,7 +5,7 @@ from .example_app import app, test_task, test_task_v1, buggy_task
 
 
 async def send(message):
-    print(message)
+    pass
 
 
 async def receive():

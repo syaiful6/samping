@@ -311,7 +311,7 @@ class SQSDriver(QueueDriver):
 
     def _to_delivery_dict(self, message: Message):
         body = base64.standard_b64encode(str_to_bytes(message.body)).decode()
-        properties = message.properties
+        properties = message.properties or {}
         if "delivery_info" in properties:
             del properties["delivery_info"]
         if "delivery_tag" in properties:
@@ -319,7 +319,7 @@ class SQSDriver(QueueDriver):
 
         return {
             "headers": message.headers,
-            "properties": message.properties,
+            "properties": properties,
             "content_type": message.content_type,
             "content_encoding": message.content_encoding,
             "body": body,
