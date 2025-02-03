@@ -59,7 +59,9 @@ propcache==0.2.1
     # via yarl
 pytest==8.1.1
     # via pytest-asyncio
+    # via pytest-mock
 pytest-asyncio==0.23.6
+pytest-mock==3.14.0
 python-dateutil==2.9.0.post0
     # via aiobotocore
     # via botocore

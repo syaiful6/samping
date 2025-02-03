@@ -1,10 +1,11 @@
-
 import argparse
 import logging
 import sys
 import asyncio
+from samping import run_worker as run
 
 from .app import app
+
 
 def run_worker(queues: str, num_worker: int):
     root = logging.getLogger()
@@ -21,7 +22,7 @@ def run_worker(queues: str, num_worker: int):
     handler.setFormatter(formatter)
     root.addHandler(handler)
 
-    asyncio.run(app.run_worker(queues, num_worker))
+    asyncio.run(run(app, queues, num_worker, beat=True))
 
 
 if __name__ == "__main__":

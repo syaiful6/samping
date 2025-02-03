@@ -1,6 +1,6 @@
 [project]
 name = "samping"
-version = "0.2.3"
+version = "0.3.0"
 description = "simple task queue library and background task processing"
 authors = [{ name = "syaiful6", email = "syai.bahri6@gmail.com" }]
 dependencies = ["pytz>=2022.7.1", "msgpack>=1.0.5", "croniter>=2.0.3"]
@@ -17,6 +17,7 @@ dev-dependencies = [
   "pytest>=8.1.1",
   "pytest-asyncio>=0.23.6",
   "aioboto3>=13.4.0",
+  "pytest-mock>=3.14.0",
 ]
 
 [tool.hatch.metadata]
