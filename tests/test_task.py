@@ -37,6 +37,12 @@ def test_create_request_from_message_v1():
     assert request.expires is not None
 
 
+def test_create_request_time_limit():
+    msg = test_task.to_message(args=["argument-data"])
+    request = Request.from_message(test_task.app, msg)
+    assert request.time_limit == test_task.time_limit
+
+
 @pytest.mark.asyncio
 async def test_create_task_executiong_v1():
     msg = test_task_v1.to_message(args=[3], expires=30)

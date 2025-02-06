@@ -84,7 +84,7 @@ class Request:
             group=message.headers.get("group", None),
             origin=message.headers.get("origin", None),
             reply_to=message.properties.get("reply_to", None),
-            time_limit=get_time_limit(message.headers.get("time_limit", None)),
+            time_limit=get_time_limit(message.headers.get("timelimit", None)),
             chord=embeds.get("chord", None),
             callbacks=embeds.get("callbacks", None),
             errbacks=embeds.get("errbacks", None),
@@ -145,6 +145,6 @@ def get_time_limit(time_limit):
     if soft_limit is not None and hard_limit is not None:
         return min(soft_limit, hard_limit)
     if soft_limit is None:
-        return soft_limit
-    if hard_limit is None:
         return hard_limit
+    if hard_limit is None:
+        return soft_limit
