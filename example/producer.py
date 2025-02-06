@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 import uuid
-from .app import test_task, buggy_task
+from .app import test_task, buggy_task, long_running_tasks
 
 
 def run_producer(number):

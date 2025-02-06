@@ -53,7 +53,15 @@ async def buggy_task(wait: int):
     raise RuntimeError("buggy")
 
 
+@app.task(name="long_running_tasks")
+async def long_running_tasks():
+    logger.info("executing long running tasks")
+    await asyncio.sleep(60)
+
+
 @app.tab(name="print_each_minute")
 async def print_each_minute():
     logger.info("crontab print each minute executed")
     await asyncio.sleep(1)
+
+    
